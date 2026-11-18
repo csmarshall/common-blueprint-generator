@@ -13,12 +13,13 @@ from pathlib import Path
 import numpy as np
 from OCP.Bnd import Bnd_Box
 from OCP.BndLib import BndLib_Add3dCurve
-from OCP.BRepAdaptor import BRepAdaptor_Curve
+from OCP.BRep import BRep_Builder
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Sewing
 from OCP.BRepLib import BRepLib
-from OCP.GeomAbs import GeomAbs_CurveType
+from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pln, gp_Pnt
 from OCP.HLRAlgo import HLRAlgo_Projector
 from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
@@ -26,7 +27,7 @@ from OCP.IFSelect import IFSelect_ReturnStatus
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import STEPControl_Reader
 from OCP.StlAPI import StlAPI_Reader
-from OCP.TopAbs import TopAbs_ShapeEnum
+from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 
@@ -43,6 +44,7 @@ MESH_COPLANAR_DEG = 0.05  # triangles whose normals differ by less than this are
 
 # TopoDS's downcast is Edge_s in OCP 7.9 (cadquery) and Edge in OCP 8 (build123d); the package has to run under both.
 _as_edge = getattr(TopoDS, "Edge_s", None) or TopoDS.Edge
+_as_face = getattr(TopoDS, "Face_s", None) or TopoDS.Face
 
 
 @dataclass
@@ -164,6 +166,7 @@ def project(shape: TopoDS_Shape, toward_viewer: Vec, up: Vec) -> Projection:
     surfaces draw as one clean outline rather than a comb of facet lines.
     """
     BRepLib.EncodeRegularity_s(shape, math.radians(SMOOTH_ANGLE_DEG))
+    _keep_facet_silhouettes(shape, toward_viewer)
     x_dir = cross(up, toward_viewer)
     algo = HLRBRep_Algo()
     algo.Add(shape)
@@ -191,6 +194,56 @@ def project(shape: TopoDS_Shape, toward_viewer: Vec, up: Vec) -> Projection:
     view.extent = (lo.X(), lo.Y(), hi.X(), hi.Y())
     log.debug("projected toward %s: %d visible, %d hidden, %d circles", toward_viewer, len(view.visible), len(view.hidden), len(view.circles))
     return view
+
+
+def _keep_facet_silhouettes(shape: TopoDS_Shape, toward_viewer: Vec) -> None:
+    """Re-mark every edge between two flat faces for this view: sharp if it is a silhouette, smooth if the faces meet flatter than SMOOTH_ANGLE_DEG.
+
+    On a mesh, a curved surface is many flat facets, and its outline in a given view runs along facet edges where one facet faces the viewer
+    and its neighbour faces away. EncodeRegularity marks those edges smooth (the facets meet at a shallow angle), so HLR would drop the outline
+    along with the facet seams. Re-marked per view, because which edges are silhouettes depends on the direction. Exact curved surfaces are left
+    alone: OCC computes their outlines itself.
+    """
+    view = np.array(toward_viewer, float)
+    cos_smooth = math.cos(math.radians(SMOOTH_ANGLE_DEG))
+    faces: list[tuple[object, np.ndarray | None]] = []  # (face, outward normal if planar)
+    # Edges keyed by their orientation-independent hash, confirmed with IsSame: OCP's == compares Python objects, not shapes, and OCP 8 no
+    # longer exposes TopTools' indexed maps. Each entry: [edge, [indices of the faces it bounds]].
+    buckets: dict[int, list[list[object]]] = {}
+    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+    while explorer.More():
+        face = _as_face(explorer.Current())
+        surface = BRepAdaptor_Surface(face)
+        normal = None
+        if surface.GetType() == GeomAbs_SurfaceType.GeomAbs_Plane:
+            d = surface.Plane().Axis().Direction()
+            normal = np.array([d.X(), d.Y(), d.Z()]) * (-1 if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED else 1)
+        index = len(faces)
+        faces.append((face, normal))
+        edges = TopExp_Explorer(face, TopAbs_ShapeEnum.TopAbs_EDGE)
+        while edges.More():
+            edge = edges.Current()
+            bucket = buckets.setdefault(hash(edge), [])
+            for entry in bucket:
+                if entry[0].IsSame(edge):  # type: ignore[attr-defined]
+                    entry[1].append(index)  # type: ignore[attr-defined]
+                    break
+            else:
+                bucket.append([edge, [index]])
+            edges.Next()
+        explorer.Next()
+    builder = BRep_Builder()
+    for bucket in buckets.values():
+        for edge, owners in bucket:
+            if len(owners) != 2:  # type: ignore[arg-type]
+                continue
+            (f1, n1), (f2, n2) = faces[owners[0]], faces[owners[1]]  # type: ignore[index]
+            if n1 is None or n2 is None:
+                continue
+            silhouette = float(np.dot(n1, view)) * float(np.dot(n2, view)) < 0
+            smooth = float(np.dot(n1, n2)) > cos_smooth
+            continuity = GeomAbs_Shape.GeomAbs_C1 if smooth and not silhouette else GeomAbs_Shape.GeomAbs_C0
+            builder.Continuity(_as_edge(edge), f1, f2, continuity)
 
 
 def section_loops(shape: TopoDS_Shape, origin: Vec, toward_viewer: Vec, x_dir: Vec) -> list[Polyline]:

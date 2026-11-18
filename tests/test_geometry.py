@@ -6,6 +6,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from OCP.BRepMesh import BRepMesh_IncrementalMesh
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeSphere
+from OCP.StlAPI import StlAPI_Writer
 
 from blueprint.geometry import load_shape, project, section_loops
 from blueprint.layout import view_directions
@@ -107,6 +110,22 @@ def test_stl_fallback_draws_outline_without_facet_comb(block_stl: Path, block_st
         if min(_point_to_segment(mid, a, b) for a, b in exact_segments) > 1e-3:
             stray.append(seg.tolist())
     assert not stray, f"{len(stray)} mesh edges cross flat faces, e.g. {stray[:2]}"
+
+
+def test_curved_mesh_keeps_its_silhouette(tmp_path: Path) -> None:
+    """A meshed sphere seen from the front must show its whole outline: facet edges on the silhouette stay drawn although the facets meet flat."""
+    radius = 10.0
+    sphere = BRepPrimAPI_MakeSphere(radius).Shape()
+    BRepMesh_IncrementalMesh(sphere, 0.02)
+    path = tmp_path / "sphere.stl"
+    assert StlAPI_Writer().Write(sphere, str(path))
+    view = project(load_shape(path), (0, -1, 0), (0, 0, 1))
+    pts = np.vstack(view.visible)
+    r = np.hypot(pts[:, 0], pts[:, 1])
+    rim = pts[np.abs(r - radius) < 0.1]
+    angles = np.degrees(np.arctan2(rim[:, 1], rim[:, 0]))
+    covered = len(np.unique(np.floor(angles / 10)))  # 36 ten-degree sectors round the outline
+    assert covered == 36, f"outline covers only {covered} of 36 ten-degree sectors"
 
 
 def test_unsupported_format(tmp_path: Path) -> None:
