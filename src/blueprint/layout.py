@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 ORTHO = ("FRONT", "TOP", "BOTTOM", "LEFT", "RIGHT", "BACK")
 ALL_VIEWS = (*ORTHO, "ISOMETRIC")
 DEFAULT_VIEWS = ("FRONT", "TOP", "RIGHT", "ISOMETRIC")  # the usual minimum; the other three are opt-in through `views`
-ISO_MAX_ENLARGE = 1.6  # the isometric is drawn at most this much larger than the main scale
+DEFAULT_ISO_SIZE = 1.0  # isometric scale as a multiple of the main scale; None fills the free space
 ISO_MIN_FRACTION = 0.45  # and at least this fraction of it, or the scale steps down
 EDGE_PAD = 16.0  # sheet mm kept clear inside the border for the outermost dimensions and captions
 
@@ -35,13 +35,22 @@ def view_directions(front: str, up: str) -> dict[str, tuple[Vec, Vec]]:
     if abs(float(np.dot(f, u))) > 1e-9:
         raise ValueError(f"front {front} and up {up} must be perpendicular")
     r = cross(u, f)  # the viewer's right hand in the front view
-    neg = lambda v: (-v[0], -v[1], -v[2])  # noqa: E731
+    k = 1 / np.sqrt(3)
+    iso: Vec = ((f[0] + r[0] + u[0]) * k, (f[1] + r[1] + u[1]) * k, (f[2] + r[2] + u[2]) * k)
     return {
-        "FRONT": (f, u), "BACK": (neg(f), u),
-        "RIGHT": (r, u), "LEFT": (neg(r), u),
-        "TOP": (u, neg(f)), "BOTTOM": (neg(u), f),
-        "ISOMETRIC": (tuple(np.add(np.add(f, r), u) / np.sqrt(3)), u),  # type: ignore[dict-item]
+        "FRONT": (f, u),
+        "BACK": (_neg(f), u),
+        "RIGHT": (r, u),
+        "LEFT": (_neg(r), u),
+        "TOP": (u, _neg(f)),
+        "BOTTOM": (_neg(u), f),
+        "ISOMETRIC": (iso, u),
     }
+
+
+def _neg(v: Vec) -> Vec:
+    """-v."""
+    return (-v[0], -v[1], -v[2])
 
 
 @dataclass
@@ -58,12 +67,20 @@ def _size(p: Projection) -> tuple[float, float]:
     return x1 - x0, y1 - y0
 
 
-def auto_sheet(sheet: Sheet, shape: TopoDS_Shape, front: str = "+Z", up: str = "+Y", captions: dict[str, str] | None = None,
-               views: tuple[str, ...] = DEFAULT_VIEWS) -> AutoLayout:
+def auto_sheet(
+    sheet: Sheet,
+    shape: TopoDS_Shape,
+    front: str = "+Z",
+    up: str = "+Y",
+    captions: dict[str, str] | None = None,
+    views: tuple[str, ...] = DEFAULT_VIEWS,
+    iso_size: float | None = DEFAULT_ISO_SIZE,
+) -> AutoLayout:
     """Project `shape`, choose the scale, place and draw the views with overall dimensions and captions.
 
     `views` picks which views appear. Several orthographic views keep their third-angle positions around the front; one view on its own is centred
-    and drawn as large as a standard scale allows (the isometric alone is scaled to fill the space).
+    and drawn as large as a standard scale allows (the isometric alone is scaled to fill the space). `iso_size` sets the isometric's scale as a
+    multiple of the main scale when it sits beside other views; None makes it fill the space to their right.
     """
     captions = {k.upper(): v for k, v in (captions or {}).items()}
     views = tuple(v.upper() for v in views)
@@ -80,7 +97,7 @@ def auto_sheet(sheet: Sheet, shape: TopoDS_Shape, front: str = "+Z", up: str = "
     rev_h = sheet.rev_block_box(2)[3] - sheet.rev_block_box(2)[1]
     if len(views) == 1:
         return _single(sheet, views[0], proj[views[0]], (area[0], area[1], area[2], area[3] - rev_h), captions)
-    return _cross(sheet, proj, area, rev_h, gap, captions)
+    return _cross(sheet, proj, area, rev_h, gap, captions, iso_size)
 
 
 def _single(sheet: Sheet, name: str, projection: Projection, area: tuple[float, float, float, float], captions: dict[str, str]) -> AutoLayout:
@@ -108,8 +125,15 @@ def _single(sheet: Sheet, name: str, projection: Projection, area: tuple[float, 
     return AutoLayout(s, s, {name: v})
 
 
-def _cross(sheet: Sheet, proj: dict[str, Projection], area: tuple[float, float, float, float], rev_h: float, gap: float,
-           captions: dict[str, str]) -> AutoLayout:
+def _cross(
+    sheet: Sheet,
+    proj: dict[str, Projection],
+    area: tuple[float, float, float, float],
+    rev_h: float,
+    gap: float,
+    captions: dict[str, str],
+    iso_size: float | None,
+) -> AutoLayout:
     """Orthographic views in their third-angle positions around the front, and the isometric (if chosen) in the space to their right."""
     size = {name: _size(p) for name, p in proj.items()}
     has_iso = "ISOMETRIC" in proj
@@ -137,7 +161,8 @@ def _cross(sheet: Sheet, proj: dict[str, Projection], area: tuple[float, float, 
         if iso_w_room <= 0:
             continue
         iw, ih = size["ISOMETRIC"]
-        iso_s = min(s * ISO_MAX_ENLARGE, iso_w_room / iw, iso_h_room / ih)
+        room_s = min(iso_w_room / iw, iso_h_room / ih)
+        iso_s = room_s if iso_size is None else min(s * iso_size, room_s)
         if iso_s >= s * ISO_MIN_FRACTION:
             chosen = (s, iso_s, cross_w, cross_h)
             break

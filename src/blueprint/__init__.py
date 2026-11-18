@@ -9,5 +9,21 @@ from .revisions import git_dates, revisions
 from .sheet import Revision, Sheet, TitleInfo, View
 from .style import Style, Toggles, fmt, scale_label
 
-__all__ = ["Projection", "Revision", "Sheet", "Style", "TitleInfo", "Toggles", "View", "auto_sheet", "fmt", "git_dates", "load_shape", "project",
-           "revisions", "scale_label", "section_loops", "view_directions"]
+__all__ = [
+    "Projection",
+    "Revision",
+    "Sheet",
+    "Style",
+    "TitleInfo",
+    "Toggles",
+    "View",
+    "auto_sheet",
+    "fmt",
+    "git_dates",
+    "load_shape",
+    "project",
+    "revisions",
+    "scale_label",
+    "section_loops",
+    "view_directions",
+]

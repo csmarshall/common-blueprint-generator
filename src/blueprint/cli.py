@@ -26,15 +26,25 @@ log = logging.getLogger("blueprint")
 
 def title_info(cfg: DrawingConfig, rendered: date, dates: GitDates) -> TitleInfo:
     """Title-block content: the config's words plus git-derived dates and revisions."""
-    return TitleInfo(title=cfg.title, drawing_number=cfg.drawing_number, for_=cfg.for_, material=cfg.material, source=cfg.source,
-                     drawn_by=cfg.drawn_by, company=cfg.company, started=dates.started, updated=rendered, revisions=revisions(dates, rendered))
+    return TitleInfo(
+        title=cfg.title,
+        drawing_number=cfg.drawing_number,
+        for_=cfg.for_,
+        material=cfg.material,
+        source=cfg.source,
+        drawn_by=cfg.drawn_by,
+        company=cfg.company,
+        started=dates.started,
+        updated=rendered,
+        revisions=revisions(dates, rendered),
+    )
 
 
 def render(cfg: DrawingConfig, dates: GitDates, rendered: date | None = None) -> list[Path]:
     """Draw one automatic sheet and write it in every configured format. `dates` is read before any sheet is written (see main)."""
     rendered = rendered or date.today()
     sheet = Sheet(cfg.sheet, replace(Style(), toggles=cfg.toggles))
-    layout = auto_sheet(sheet, load_shape(cfg.model), cfg.front, cfg.up, cfg.captions, cfg.views)
+    layout = auto_sheet(sheet, load_shape(cfg.model), cfg.front, cfg.up, cfg.captions, cfg.views, cfg.isometric)
     sheet.title_block(title_info(cfg, rendered, dates), layout.scale)
     sheet.notes(cfg.notes)
     return sheet.save(cfg.output, cfg.formats)

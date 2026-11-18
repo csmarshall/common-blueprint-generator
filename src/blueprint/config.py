@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-from .layout import ALL_VIEWS, DEFAULT_VIEWS
+from .layout import ALL_VIEWS, DEFAULT_ISO_SIZE, DEFAULT_VIEWS
 from .style import SHEET_SIZES, Toggles
 
 FORMATS = ("png", "svg", "pdf")
@@ -33,13 +33,32 @@ class DrawingConfig:
     sheet: str = "B"
     formats: tuple[str, ...] = ("png", "svg")
     views: tuple[str, ...] = DEFAULT_VIEWS  # any subset; one name alone draws that view by itself, as large as fits
+    isometric: float | None = DEFAULT_ISO_SIZE  # multiple of the main scale, or None (config: fill) to fill the free space
     captions: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     toggles: Toggles = Toggles()
 
 
-KNOWN = {"model", "output", "title", "drawing_number", "for", "material", "source", "drawn_by", "company", "front", "up", "sheet", "formats",
-         "views", "captions", "notes", "style"}
+KNOWN = {
+    "model",
+    "output",
+    "title",
+    "drawing_number",
+    "for",
+    "material",
+    "source",
+    "drawn_by",
+    "company",
+    "front",
+    "up",
+    "sheet",
+    "formats",
+    "views",
+    "isometric",
+    "captions",
+    "notes",
+    "style",
+}
 
 
 def load(path: Path) -> DrawingConfig:
@@ -61,15 +80,35 @@ def load(path: Path) -> DrawingConfig:
     views = tuple(str(v).upper() for v in raw.get("views") or DEFAULT_VIEWS)
     if bad_views := [v for v in views if v not in ALL_VIEWS]:
         raise ValueError(f"{path}: unknown views {bad_views}; choose from {[v.lower() for v in ALL_VIEWS]}")
+    iso_raw = raw.get("isometric", DEFAULT_ISO_SIZE)
+    if iso_raw == "fill":
+        isometric = None
+    elif isinstance(iso_raw, (int, float)) and not isinstance(iso_raw, bool) and iso_raw > 0:
+        isometric = float(iso_raw)
+    else:
+        raise ValueError(f"{path}: isometric must be a positive multiple of the main scale (e.g. 1.0, 1.6) or 'fill', not {iso_raw!r}")
     style = raw.get("style") or {}
     toggle_names = {f.name for f in fields(Toggles)}
     if bad_toggles := set(style) - toggle_names:
         raise ValueError(f"{path}: unknown style switches {sorted(bad_toggles)}; expected some of {sorted(toggle_names)}")
     return DrawingConfig(
-        path=path, model=(base / raw["model"]).resolve(), output=(base / raw["output"]).resolve(), title=str(raw["title"]),
-        drawing_number=str(raw.get("drawing_number", "")), for_=str(raw.get("for", "")), material=str(raw.get("material", "")),
-        source=str(raw.get("source", "")), drawn_by=str(raw.get("drawn_by", "")), company=str(raw.get("company", "")),
-        front=str(raw.get("front", "+Z")).upper(), up=str(raw.get("up", "+Y")).upper(), sheet=sheet, formats=formats, views=views,
-        captions={str(k).upper(): str(v) for k, v in (raw.get("captions") or {}).items()}, notes=[str(n) for n in raw.get("notes") or []],
+        path=path,
+        model=(base / raw["model"]).resolve(),
+        output=(base / raw["output"]).resolve(),
+        title=str(raw["title"]),
+        drawing_number=str(raw.get("drawing_number", "")),
+        for_=str(raw.get("for", "")),
+        material=str(raw.get("material", "")),
+        source=str(raw.get("source", "")),
+        drawn_by=str(raw.get("drawn_by", "")),
+        company=str(raw.get("company", "")),
+        front=str(raw.get("front", "+Z")).upper(),
+        up=str(raw.get("up", "+Y")).upper(),
+        sheet=sheet,
+        formats=formats,
+        views=views,
+        isometric=isometric,
+        captions={str(k).upper(): str(v) for k, v in (raw.get("captions") or {}).items()},
+        notes=[str(n) for n in raw.get("notes") or []],
         toggles=Toggles(**{k: bool(v) for k, v in style.items()}),
     )

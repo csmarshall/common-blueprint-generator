@@ -11,12 +11,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+from OCP.Bnd import Bnd_Box
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
 from OCP.BRepLib import BRepLib
-from OCP.Bnd import Bnd_Box
 from OCP.GeomAbs import GeomAbs_CurveType
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pln, gp_Pnt
 from OCP.HLRAlgo import HLRAlgo_Projector
@@ -57,8 +57,9 @@ class Projection:
 
     def scaled(self, k: float) -> Projection:
         """The same view with every coordinate multiplied by k."""
-        return Projection([p * k for p in self.visible], [p * k for p in self.hidden], [p * k for p in self.straight],
-                          [(x * k, y * k, r * k) for x, y, r in self.circles])
+        return Projection(
+            [p * k for p in self.visible], [p * k for p in self.hidden], [p * k for p in self.straight], [(x * k, y * k, r * k) for x, y, r in self.circles]
+        )
 
 
 def load_shape(path: Path) -> TopoDS_Shape:
@@ -116,7 +117,7 @@ def _sample(edge: object) -> tuple[Polyline, GeomAbs_CurveType, BRepAdaptor_Curv
 
 
 def cross(a: Vec, b: Vec) -> Vec:
-    """a × b."""
+    """A × b."""
     return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
 
 

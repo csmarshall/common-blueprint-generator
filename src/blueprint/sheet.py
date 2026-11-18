@@ -39,6 +39,7 @@ SIDE_COLUMN_W = 92.0  # tolerance block and projection symbol, left of the title
 REV_COL_W = (12.0, 76.0, 26.0)  # REV, DESCRIPTION, DATE
 REV_ROW_H = 6.0
 STAMP_R = 19.0
+PNG_DPI = 150  # 2550 px across an ANSI B sheet; the SVG is the scalable copy, so the PNG only needs to be a sharp preview
 
 
 @dataclass
@@ -127,15 +128,35 @@ class Sheet:
     def dimension(self, a: tuple[float, float], b: tuple[float, float], text: str, vertical: bool = False) -> None:
         """A dimension line with arrows at both ends and its value on a paper patch at the middle."""
         pal, ln = self.style.palette, self.style.lines
-        self.ax.annotate("", xy=a, xytext=b, arrowprops={"arrowstyle": "<|-|>", "color": pal.dim, "lw": ln.dim, "shrinkA": 0, "shrinkB": 0, "mutation_scale": 6})
-        self.text((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, text, self.style.type.dim, pal.dim, ha="center", va="center", rotation=90 if vertical else 0,
-                  bbox={"boxstyle": "square,pad=0.15", "fc": pal.paper, "ec": "none"})
+        self.ax.annotate(
+            "", xy=a, xytext=b, arrowprops={"arrowstyle": "<|-|>", "color": pal.dim, "lw": ln.dim, "shrinkA": 0, "shrinkB": 0, "mutation_scale": 6}
+        )
+        self.text(
+            (a[0] + b[0]) / 2,
+            (a[1] + b[1]) / 2,
+            text,
+            self.style.type.dim,
+            pal.dim,
+            ha="center",
+            va="center",
+            rotation=90 if vertical else 0,
+            bbox={"boxstyle": "square,pad=0.15", "fc": pal.paper, "ec": "none"},
+        )
 
     def leader(self, at: tuple[float, float], text_at: tuple[float, float], text: str, ha: str = "left") -> None:
         """A callout: text with a thin arrow to the feature."""
         pal = self.style.palette
-        self.ax.annotate(text, xy=at, xytext=text_at, color=pal.dim, fontsize=self.style.type.dim, fontfamily=self.style.type.family, ha=ha, va="center",
-                         arrowprops={"arrowstyle": "-|>", "color": pal.dim, "lw": self.style.lines.dim, "shrinkA": 1.5, "shrinkB": 0, "mutation_scale": 6})
+        self.ax.annotate(
+            text,
+            xy=at,
+            xytext=text_at,
+            color=pal.dim,
+            fontsize=self.style.type.dim,
+            fontfamily=self.style.type.family,
+            ha=ha,
+            va="center",
+            arrowprops={"arrowstyle": "-|>", "color": pal.dim, "lw": self.style.lines.dim, "shrinkA": 1.5, "shrinkB": 0, "mutation_scale": 6},
+        )
 
     def caption(self, x: float, y: float, name: str, detail: str = "") -> None:
         """A view caption: bold name, with an optional explanation in brackets."""
@@ -157,8 +178,9 @@ class Sheet:
             vignette = -0.5 * (nx**2 + ny**2) ** 1.4
             creases = 0.05 * np.exp(-(((xx - wpx / 2) / 3.0) ** 2)) + 0.04 * np.exp(-(((yy - hpx / 2) / 3.0) ** 2))
             shade = 1.0 + grain + blotches + vignette + creases
-            self.ax.imshow(np.clip(rgb[None, None, :] * shade[:, :, None], 0, 1), extent=(0, self.w, 0, self.h), origin="lower",
-                           interpolation="bilinear", zorder=-10)
+            self.ax.imshow(
+                np.clip(rgb[None, None, :] * shade[:, :, None], 0, 1), extent=(0, self.w, 0, self.h), origin="lower", interpolation="bilinear", zorder=-10
+            )
         else:
             self.ax.add_patch(Rectangle((0, 0), self.w, self.h, fc=st.palette.paper, ec="none", zorder=-10))
         if st.toggles.grid:
@@ -177,8 +199,12 @@ class Sheet:
         self.ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fc="none", ec=st.palette.ink, lw=st.lines.border_inner))
         mark = m * 0.6
         cx, cy = self.w / 2, self.h / 2
-        for xs, ys in (([cx, cx], [m - mark, m + sp.border_gap]), ([cx, cx], [self.h - m - sp.border_gap, self.h - m + mark]),
-                       ([m - mark, m + sp.border_gap], [cy, cy]), ([self.w - m - sp.border_gap, self.w - m + mark], [cy, cy])):
+        for xs, ys in (
+            ([cx, cx], [m - mark, m + sp.border_gap]),
+            ([cx, cx], [self.h - m - sp.border_gap, self.h - m + mark]),
+            ([m - mark, m + sp.border_gap], [cy, cy]),
+            ([self.w - m - sp.border_gap, self.w - m + mark], [cy, cy]),
+        ):
             self.line(xs, ys, st.lines.border_outer)
         if st.toggles.winks:
             self.text(cx + 2.5, self.h - m + mark / 2, "↑ THIS WAY UP", st.type.label, st.palette.dim, ha="left", va="center")
@@ -242,8 +268,9 @@ class Sheet:
         pal, lw = self.style.palette, self.style.lines.visible * 0.7
         h_small = d * 0.55
         side_w = d * 1.15
-        self.ax.add_patch(Polygon([(x, y + (d - h_small) / 2), (x + side_w, y), (x + side_w, y + d), (x, y + (d + h_small) / 2)],
-                                  closed=True, fc="none", ec=pal.ink, lw=lw))
+        self.ax.add_patch(
+            Polygon([(x, y + (d - h_small) / 2), (x + side_w, y), (x + side_w, y + d), (x, y + (d + h_small) / 2)], closed=True, fc="none", ec=pal.ink, lw=lw)
+        )
         cx, cy = x + side_w + d * 0.6 + d / 2, y + d / 2
         self.ax.add_patch(Circle((cx, cy), d / 2, fc="none", ec=pal.ink, lw=lw))
         self.ax.add_patch(Circle((cx, cy), h_small / 2, fc="none", ec=pal.ink, lw=lw))
@@ -273,7 +300,7 @@ class Sheet:
 
     def notes(self, lines: Sequence[str], x: float | None = None, y: float | None = None, right: float | None = None) -> None:
         """Numbered general notes, wrapped to the space between `x` and `right` (default: left border to the stamp)."""
-        st, ty = self.style, self.style.type
+        ty = self.style.type
         x = self.inner[0] + 3 if x is None else x
         top = self.title_block_box[3] if y is None else y
         right = (self.stamp_centre[0] - STAMP_R - 6) if right is None else right
@@ -298,11 +325,15 @@ class Sheet:
         def at(dy: float) -> tuple[float, float]:
             return cx - dy * math.sin(rad), cy + dy * math.cos(rad)
 
-        for dy, s, size, weight in ((7.0, company.upper(), ty.label + 1.2, "normal"), (0.0, "APPROVED", ty.caption + 2.5, "bold"), (-7.0, "FOR PRINTING", ty.label + 1.2, "normal")):
+        for dy, s, size, weight in (
+            (7.0, company.upper(), ty.label + 1.2, "normal"),
+            (0.0, "APPROVED", ty.caption + 2.5, "bold"),
+            (-7.0, "FOR PRINTING", ty.label + 1.2, "normal"),
+        ):
             self.text(*at(dy), s, size, pal.dim, ha="center", va="center", rotation=tilt, weight=weight, alpha=0.9)
 
     # ------------------------------------------------------------------ output
-    def save(self, stem: Path, formats: Sequence[str] = ("png", "svg"), dpi: int = 200) -> list[Path]:
+    def save(self, stem: Path, formats: Sequence[str] = ("png", "svg"), dpi: int = PNG_DPI) -> list[Path]:
         """Write the sheet as stem.<format> for each format and close the figure."""
         stem.parent.mkdir(parents=True, exist_ok=True)
         written = []
@@ -366,8 +397,12 @@ class View:
         if ext:
             sign = math.copysign(1, offset)
             for p in (a, b):
-                self.sheet.line([p[0], p[0]], [p[1] + sign * sp.extension_gap, y + sign * sp.extension_overrun], self.sheet.style.lines.extension,
-                                self.sheet.style.palette.dim)
+                self.sheet.line(
+                    [p[0], p[0]],
+                    [p[1] + sign * sp.extension_gap, y + sign * sp.extension_overrun],
+                    self.sheet.style.lines.extension,
+                    self.sheet.style.palette.dim,
+                )
 
     def dim_v(self, y0: float, y1: float, x_ref: float, offset: float, text: str | None = None, ext: bool = True) -> None:
         """Vertical dimension between model y0 and y1, drawn `offset` sheet mm right (positive) or left of model x_ref."""
@@ -378,8 +413,12 @@ class View:
         if ext:
             sign = math.copysign(1, offset)
             for p in (a, b):
-                self.sheet.line([p[0] + sign * sp.extension_gap, x + sign * sp.extension_overrun], [p[1], p[1]], self.sheet.style.lines.extension,
-                                self.sheet.style.palette.dim)
+                self.sheet.line(
+                    [p[0] + sign * sp.extension_gap, x + sign * sp.extension_overrun],
+                    [p[1], p[1]],
+                    self.sheet.style.lines.extension,
+                    self.sheet.style.palette.dim,
+                )
 
     def overall_dims(self) -> None:
         """Overall width below the view and overall height to its left, measured from the projection."""
@@ -390,7 +429,8 @@ class View:
 
     def leader(self, model_xy: tuple[float, float], text_at: tuple[float, float], text: str, ha: str = "left") -> None:
         """A callout from a model point to text at a sheet position."""
-        self.sheet.leader(tuple(self.to_sheet(model_xy)[0]), text_at, text, ha)  # type: ignore[arg-type]
+        at = self.to_sheet(model_xy)[0]
+        self.sheet.leader((float(at[0]), float(at[1])), text_at, text, ha)
 
     def caption(self, name: str, detail: str = "", below: float | None = None) -> None:
         """Caption centred under the view, `below` sheet mm under its outline (default: clear of an overall dimension)."""
