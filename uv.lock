@@ -244,7 +244,7 @@ ocp = [
     { name = "cadquery-ocp-novtk" },
 ]
 reuse = [
-    { name = "reuse" },
+    { name = "reuse", extra = ["charset-normalizer"] },
 ]
 
 [package.dev-dependencies]
@@ -252,7 +252,7 @@ dev = [
     { name = "mypy" },
     { name = "pip-audit" },
     { name = "pytest" },
-    { name = "reuse" },
+    { name = "reuse", extra = ["charset-normalizer"] },
     { name = "ruff" },
     { name = "types-pyyaml" },
 ]
@@ -268,7 +268,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.9" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "reuse", marker = "extra == 'reuse'", specifier = ">=6.3" },
+    { name = "reuse", extras = ["charset-normalizer"], marker = "extra == 'reuse'", specifier = ">=6.3" },
     { name = "scipy", specifier = ">=1.12" },
     { name = "svgpath2mpl", specifier = ">=1.0" },
 ]
@@ -279,7 +279,7 @@ dev = [
     { name = "mypy", specifier = ">=1.13" },
     { name = "pip-audit" },
     { name = "pytest", specifier = ">=8" },
-    { name = "reuse", specifier = ">=6.3" },
+    { name = "reuse", extras = ["charset-normalizer"], specifier = ">=6.3" },
     { name = "ruff", specifier = ">=0.8" },
     { name = "types-pyyaml" },
 ]
@@ -1397,6 +1397,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/13/d9/b8dd83a81030450e5eb11d337c3d362769b57c763b388bfc849bfa76bbd9/reuse-6.3.0.tar.gz", hash = "sha256:5a6ca437057c07ca22a67256520e2783ab03b5524d3a4535603c3d49e3d4b001", size = 524060, upload-time = "2026-10-30T13:34:54.743Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b5/28/2206a2fa719f303b40b2bc2b50ccf06f59d64d22f2106258b2cf141e4db3/reuse-6.3.0-py3-none-any.whl", hash = "sha256:be6b598aa6d5cdf44af0da265572a72f0adcd30033857af874fd8607188259c1", size = 348530, upload-time = "2026-10-30T13:34:52.686Z" },
+]
+
+[package.optional-dependencies]
+charset-normalizer = [
+    { name = "charset-normalizer" },
 ]
 
 [[package]]
