@@ -1,5 +1,10 @@
 # common-blueprint-generator
 
+<p>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://buymeacoffee.com/cs_marshall"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
+</p>
+
 Old-school blueprint sheets for 3D-printed parts, drawn straight from the CAD model and kept current by CI.
 
 Point it at a STEP file and it draws a third-angle drawing on an ANSI B sheet: hidden-line projections of the real B-rep, overall dimensions measured from the geometry, a full title block, a revision block that names the commit it was rendered from, and a stamp. One house style is shared by every repo that uses it, and a reusable GitHub workflow re-renders the sheet whenever the model changes, so the drawing in a README never goes stale.
@@ -60,6 +65,35 @@ Run it locally with `uvx --from "common-blueprint-generator[ocp] @ git+https://g
 ### Choosing views
 
 The default is front, top and right in their third-angle positions plus an isometric, at the largest standard scale that fits. `views:` takes any subset of `front, top, bottom, left, right, back, isometric`. A single view, e.g. `views: [top]`, is centred and drawn as large as a standard scale allows. `isometric: 1.6` draws the isometric at 1.6× the main scale; `isometric: fill` fills the space beside the views. `front:` and `up:` name the model axes facing the viewer and pointing up (default `+Z` and `+Y`).
+
+### The licence on the drawing
+
+Every sheet states its licence in the title block, and the generator never guesses it. The licence and copyright are read from the repo's [REUSE.toml](https://reuse.software/spec-3.3/) for the drawing's own output file. That matters in a split-licence repo: the drawing gets the drawings' licence (say CC BY-NC-SA 4.0), not the MIT that covers the script that drew it. The [`reuse`](https://reuse.software/) package does the lookup, so REUSE's own precedence rules decide which annotation wins. A repo with no `REUSE.toml`, or with no annotation covering the drawing, fails the render with an error naming the path. `licence:` in `blueprint.yml` is the explicit override.
+
+Creative Commons licences get the official CC icons (unmodified, per the [CC trademark policy](https://creativecommons.org/policies/), with the deed URL beside them and linked in the SVG). Other licences get a drawn SPDX badge, and an id the generator doesn't know prints exactly as given. Any id containing `-NC-` adds NOT FOR RESALE.
+
+A part repo's `REUSE.toml` for the usual split looks like this (the second annotation overrides the first for drawings, models and print files):
+
+```toml
+version = 1
+
+[[annotations]]
+path = "**"
+SPDX-FileCopyrightText = "2026 Charles Marshall"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["**/*.svg", "**/*.step", "**/*.stl", "**/*.3mf", "prints/**", "docs/images/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Charles Marshall"
+SPDX-License-Identifier = "CC-BY-NC-SA-4.0"
+```
+
+The workflow installs `reuse` (the `[reuse]` extra; it's GPL-3.0-or-later, so it is optional for this MIT package). Locally: `pip install "common-blueprint-generator[ocp,reuse] @ git+..."`.
+
+### Releases
+
+`release.yml` is a second reusable workflow, run after the render: every merge to main is a patch release (v1.4.2 to v1.4.3), and a minor or major bump is a deliberate manual run with `bump: minor` or `bump: major`. Each release carries `<repo>-source-vX.Y.Z.zip` and, with `prints-paths`, `<repo>-prints-vX.Y.Z.zip`: the print files plus `LICENSES/`, `REUSE.toml` and the README. This repo releases itself the same way and moves the `v1` tag, so callers can pin `@v1`.
 
 ### Dates and revisions
 

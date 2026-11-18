@@ -24,9 +24,11 @@ from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.patches import Circle, PathPatch, Polygon, Rectangle  # noqa: E402
 from matplotlib.path import Path as MplPath  # noqa: E402
+from matplotlib.transforms import Affine2D  # noqa: E402
 from scipy.ndimage import gaussian_filter  # noqa: E402
 
 from .geometry import Polyline, Projection  # noqa: E402
+from .licences import NONCOMMERCIAL_NOTE, Licence, icon  # noqa: E402
 from .readme import PROJECT_NAME, PROJECT_URL  # noqa: E402
 from .style import PT_PER_MM, SHEET_SIZES, SheetSize, Style, fmt, scale_label  # noqa: E402
 
@@ -36,6 +38,7 @@ PAPER_PX_PER_MM = 4  # resolution of the aged paper texture
 TITLE_BLOCK_W = 170.0
 TITLE_ROW_H = 9.0
 TITLE_HEAD_H = 14.0
+TITLE_ROWS = 6  # STARTED/UPDATED/SHEET, DRAWN BY/DWG NO./SIZE, SCALE/UNITS/MATERIAL, SOURCE, FOR, LICENCE
 SIDE_COLUMN_W = 92.0  # tolerance block and projection symbol, left of the title block
 REV_COL_W = (12.0, 76.0, 26.0)  # REV, DESCRIPTION, DATE
 REV_ROW_H = 6.0
@@ -68,6 +71,9 @@ class TitleInfo:
     revisions: list[Revision] = field(default_factory=list)
     units: str = "MM"
     tolerances: Sequence[str] = ("X ±0.5", "X.X ±0.2", "X.XX ±0.1", "ANGLES ±1°")
+    licence: Licence | None = None  # printed in the title block's LICENCE row with its icons or badge
+    licence_note: str | None = None  # after the licence name; None means NOT FOR RESALE for non-commercial licences, nothing otherwise
+    copyright: str = ""  # e.g. "© 2026 Charles Marshall", from the REUSE annotation that licences the drawing
 
 
 def _date(d: date | None) -> str:
@@ -99,7 +105,7 @@ class Sheet:
     def title_block_box(self) -> tuple[float, float, float, float]:
         """(x0, y0, x1, y1) of the title block plus the tolerance and projection column beside it."""
         x1, y0 = self.inner[2], self.inner[1]
-        return x1 - TITLE_BLOCK_W - SIDE_COLUMN_W, y0, x1, y0 + TITLE_HEAD_H + 5 * TITLE_ROW_H
+        return x1 - TITLE_BLOCK_W - SIDE_COLUMN_W, y0, x1, y0 + TITLE_HEAD_H + TITLE_ROWS * TITLE_ROW_H
 
     def rev_block_box(self, rows: int) -> tuple[float, float, float, float]:
         """(x0, y0, x1, y1) of a revision block with `rows` rows, in the top-right corner."""
@@ -216,7 +222,7 @@ class Sheet:
         st, pal, ty, ln = self.style, self.style.palette, self.style.type, self.style.lines
         x1, y0 = self.inner[2], self.inner[1]
         x0 = x1 - TITLE_BLOCK_W
-        top = y0 + TITLE_HEAD_H + 5 * TITLE_ROW_H
+        top = y0 + TITLE_HEAD_H + TITLE_ROWS * TITLE_ROW_H
         self.ax.add_patch(Rectangle((x0, y0), TITLE_BLOCK_W, top - y0, fc="none", ec=pal.ink, lw=1.0))
 
         def cell(x: float, y: float, w: float, head: str, body: str, size: float = ty.body) -> None:
@@ -237,6 +243,7 @@ class Sheet:
                 cell(x0 + c * third, y0 + r * TITLE_ROW_H, third, head, body, size)
         cell(x0, y0 + 3 * TITLE_ROW_H, TITLE_BLOCK_W, "SOURCE", info.source)
         cell(x0, y0 + 4 * TITLE_ROW_H, TITLE_BLOCK_W, "FOR", info.for_)
+        self._licence_row(x0, y0 + 5 * TITLE_ROW_H, info)
         self.text(x0 + 3, top - TITLE_HEAD_H / 2, info.title, ty.title, va="center", weight="bold")
         if st.toggles.winks:
             self.text(x1, y0 - st.spacing.border_gap - 1.2, "DRAWN PER ASME Y14.5 (MOSTLY)", ty.label, pal.dim, ha="right", va="top")
@@ -257,12 +264,55 @@ class Sheet:
         if st.toggles.stamp and info.company:
             self.stamp(*self.stamp_centre, info.company)
 
+    def _licence_row(self, x: float, y: float, info: TitleInfo) -> None:
+        """LICENCE row: name, note and deed URL on the left (the URL linked in SVG), the licence's icons or SPDX badge on the right."""
+        pal, ty, ln = self.style.palette, self.style.type, self.style.lines
+        self.ax.add_patch(Rectangle((x, y), TITLE_BLOCK_W, TITLE_ROW_H, fc="none", ec=pal.ink, lw=ln.table))
+        self.text(x + 1.5, y + TITLE_ROW_H - 1.2, "LICENCE", ty.label, pal.dim, va="top")
+        lic = info.licence
+        if lic is None:
+            raise ValueError("every drawing states its licence: set TitleInfo.licence (blueprint.reuse_lookup.licence_for reads it from REUSE.toml)")
+        note = info.licence_note if info.licence_note is not None else (NONCOMMERCIAL_NOTE if lic.noncommercial else "")
+        self.text(x + 1.5, y + 1.3, " · ".join(s for s in (lic.name, note, info.copyright) if s), ty.body, va="bottom", weight="bold")
+        size = TITLE_ROW_H - 1.6
+        right = x + TITLE_BLOCK_W - 1.0
+        if lic.icons:
+            left = right - len(lic.icons) * (size + 0.6)
+            for i, name in enumerate(lic.icons):
+                self._cc_icon(name, left + i * (size + 0.6), y + 0.8, size, lic.url)
+        else:
+            left = self._spdx_badge(lic.spdx, right, y + 0.8, size, lic.url)
+        url = lic.url.removeprefix("https://")
+        self.text(left - 2.0, y + 1.3, url, ty.label, pal.dim, ha="right", va="bottom", url=lic.url)
+
+    def _cc_icon(self, name: str, x: float, y: float, size: float, url: str) -> None:
+        """One Creative Commons icon mark, unmodified and in its original colours (white disc, black glyph), linked to the deed in SVG."""
+        mark = icon(name)
+        to_sheet = Affine2D().scale(size).translate(x, y)
+        cx, cy = to_sheet.transform(mark.disc_centre)
+        disc = Circle((float(cx), float(cy)), mark.disc_radius * size, fc="#FFFFFF", ec="none", zorder=6)
+        disc.set_url(url)
+        self.ax.add_patch(disc)
+        glyph = PathPatch(mark.glyph.transformed(to_sheet), fc="#000000", ec="none", zorder=7)
+        glyph.set_url(url)
+        self.ax.add_patch(glyph)
+
+    def _spdx_badge(self, spdx: str, right: float, y: float, height: float, url: str) -> float:
+        """A plain drawn badge with the SPDX id, right-aligned at `right`, for licences without marks we may use. Returns its left edge."""
+        pal, ty = self.style.palette, self.style.type
+        width = len(spdx) * ty.body / PT_PER_MM * 0.6 + 4.0  # monospace advance is 0.6 em
+        badge = Rectangle((right - width, y), width, height, fc="none", ec=pal.ink, lw=self.style.lines.table * 2)
+        badge.set_url(url)
+        self.ax.add_patch(badge)
+        self.text(right - width / 2, y + height / 2, spdx, ty.body, ha="center", va="center", weight="bold", url=url)
+        return right - width
+
     def _side_column(self, info: TitleInfo) -> None:
         """Tolerance block above the third-angle projection symbol, to the left of the title block."""
         st, pal, ty, ln = self.style, self.style.palette, self.style.type, self.style.lines
         x1, y0 = self.inner[2] - TITLE_BLOCK_W, self.inner[1]
         x0 = x1 - SIDE_COLUMN_W
-        h_total = TITLE_HEAD_H + 5 * TITLE_ROW_H
+        h_total = TITLE_HEAD_H + TITLE_ROWS * TITLE_ROW_H
         h_sym = 26.0
         self.ax.add_patch(Rectangle((x0, y0), SIDE_COLUMN_W, h_sym, fc="none", ec=pal.ink, lw=ln.table))
         self.ax.add_patch(Rectangle((x0, y0 + h_sym), SIDE_COLUMN_W, h_total - h_sym, fc="none", ec=pal.ink, lw=ln.table))
@@ -349,14 +399,15 @@ class Sheet:
     def save(self, stem: Path, formats: Sequence[str] = ("png", "svg"), dpi: int = PNG_DPI) -> list[Path]:
         """Write the sheet as stem.<format> for each format and close the figure.
 
-        Output is byte-stable for the same drawing on the same toolchain (fixed SVG id salt, no creation date in the metadata), so a re-render that
-        changes nothing commits nothing.
+        No randomness or file metadata dates (fixed SVG id salt, no creation date), so two renders of the same drawing on the same day, commit and
+        toolchain are byte-identical. The title block's UPDATED date and RENDERED FROM sha still change per day and commit, by design, so a re-render
+        on a new day or after any commit differs.
         """
         stem.parent.mkdir(parents=True, exist_ok=True)
         written = []
         no_dates: dict[str, dict[str, str | None]] = {"svg": {"Date": None}, "pdf": {"CreationDate": None, "ModDate": None}, "png": {}}
         for ext in formats:
-            path = stem.with_suffix(f".{ext}")
+            path = stem.with_name(f"{stem.name}.{ext}")  # not with_suffix: an output name may contain dots (part-v1.2)
             with plt.rc_context({"svg.hashsalt": "common-blueprint-generator"}):
                 self.fig.savefig(path, dpi=dpi if ext == "png" else None, facecolor=self.style.palette.paper, metadata=no_dates.get(ext, {}))
             log.info("wrote %s (%d KiB)", path, path.stat().st_size // 1024)

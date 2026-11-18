@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 from OCP.Bnd import Bnd_Box
+from OCP.BndLib import BndLib_Add3dCurve
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
 from OCP.BRepBndLib import BRepBndLib
@@ -49,16 +50,29 @@ class Projection:
     hidden: list[Polyline]
     straight: list[Polyline] = field(default_factory=list)  # visible straight edges, two points each
     circles: list[tuple[float, float, float]] = field(default_factory=list)  # visible full circles seen face on: (cx, cy, r)
+    extent: tuple[float, float, float, float] | None = None  # exact (xmin, ymin, xmax, ymax) of the visible edges, from their curves
 
     def bounds(self) -> tuple[float, float, float, float]:
-        """(xmin, ymin, xmax, ymax) over the visible lines."""
+        """(xmin, ymin, xmax, ymax) of the visible outline: exact from the curves when known, else from the sampled polylines.
+
+        The exact extent matters for curved outlines: 28 samples round a 20 mm circle would measure 19.93.
+        """
+        if self.extent is not None:
+            return self.extent
+        if not self.visible:
+            raise ValueError("this view has no visible edges: the part may be empty or seen exactly edge-on")
         pts = np.vstack(self.visible)
         return float(pts[:, 0].min()), float(pts[:, 1].min()), float(pts[:, 0].max()), float(pts[:, 1].max())
 
     def scaled(self, k: float) -> Projection:
         """The same view with every coordinate multiplied by k."""
+        extent = None if self.extent is None else (self.extent[0] * k, self.extent[1] * k, self.extent[2] * k, self.extent[3] * k)
         return Projection(
-            [p * k for p in self.visible], [p * k for p in self.hidden], [p * k for p in self.straight], [(x * k, y * k, r * k) for x, y, r in self.circles]
+            [p * k for p in self.visible],
+            [p * k for p in self.hidden],
+            [p * k for p in self.straight],
+            [(x * k, y * k, r * k) for x, y, r in self.circles],
+            extent,
         )
 
 
@@ -137,8 +151,10 @@ def project(shape: TopoDS_Shape, toward_viewer: Vec, up: Vec) -> Projection:
     algo.Hide()
     out = HLRBRep_HLRToShape(algo)
     view = Projection([], [])
+    box = Bnd_Box()
     for edge in _edges(out.VCompound()) + _edges(out.OutLineVCompound()):
         pts, kind, curve = _sample(edge)
+        BndLib_Add3dCurve.AddOptimal_s(curve, 0.0, box)  # the curve's true extremes, not just the sampled points
         view.visible.append(pts)
         if kind == GeomAbs_CurveType.GeomAbs_Line:
             view.straight.append(pts)
@@ -148,16 +164,23 @@ def project(shape: TopoDS_Shape, toward_viewer: Vec, up: Vec) -> Projection:
             view.circles.append((centre.X(), centre.Y(), circle.Radius()))
     for edge in _edges(out.HCompound()) + _edges(out.OutLineHCompound()):
         view.hidden.append(_sample(edge)[0])
+    if not view.visible:
+        raise ValueError(f"nothing is visible looking from {toward_viewer}: the part may be empty")
+    lo, hi = box.CornerMin(), box.CornerMax()
+    view.extent = (lo.X(), lo.Y(), hi.X(), hi.Y())
     log.debug("projected toward %s: %d visible, %d hidden, %d circles", toward_viewer, len(view.visible), len(view.hidden), len(view.circles))
     return view
 
 
 def section_loops(shape: TopoDS_Shape, origin: Vec, toward_viewer: Vec, x_dir: Vec) -> list[Polyline]:
-    """Closed outlines of the cut through `shape` on the plane at `origin` facing `toward_viewer`, as the viewer sees them: x along `x_dir`, y up.
+    """Closed outlines of the cut through `shape` on the plane through `origin` facing `toward_viewer`, as the viewer sees them: x along `x_dir`, y up.
 
-    Up is toward_viewer × x_dir, the same convention as project(), so a section and a projection from the same direction overlay exactly.
+    Points are in the same frame as project() from the same direction (model origin at view (0, 0), up = toward_viewer × x_dir), wherever `origin`
+    sits in the plane, so a section hatched onto a View of that projection lands on it exactly. `x_dir` must be a unit vector in the plane.
     Each edge is sampled and the samples chained head to tail, so a loop comes back in drawing order whatever the stored edge orientations are.
     """
+    if abs(float(np.dot(x_dir, toward_viewer))) > 1e-9 or abs(float(np.linalg.norm(x_dir)) - 1) > 1e-9:
+        raise ValueError(f"x_dir {x_dir} must be a unit vector perpendicular to toward_viewer {toward_viewer}")
     plane = gp_Pln(gp_Pnt(*origin), gp_Dir(*toward_viewer))
     section = BRepAlgoAPI_Section(shape, BRepBuilderAPI_MakeFace(plane).Face())
     section.Build()
@@ -168,7 +191,7 @@ def section_loops(shape: TopoDS_Shape, origin: Vec, toward_viewer: Vec, x_dir: V
         curve = BRepAdaptor_Curve(_as_edge(explorer.Current()))
         n = 2 if curve.GetType() == GeomAbs_CurveType.GeomAbs_Line else CURVE_SAMPLES
         t0, t1 = curve.FirstParameter(), curve.LastParameter()
-        pts3 = np.array([[*curve.Value(t0 + (t1 - t0) * i / (n - 1)).Coord()] for i in range(n)]) - np.array(origin)
+        pts3 = np.array([[*curve.Value(t0 + (t1 - t0) * i / (n - 1)).Coord()] for i in range(n)])
         segments.append(np.column_stack([pts3 @ np.array(x_dir), pts3 @ np.array(y_dir)]))
         explorer.Next()
     return _chain(segments)

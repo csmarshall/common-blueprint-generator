@@ -8,6 +8,7 @@ material: PLA is fine here
 source: tests/conftest.py (notched_block)
 drawn_by: THE GENERATOR
 company: Example Works
+licence: MIT
 readme: ../README.md
 formats: [svg, png]
 captions:

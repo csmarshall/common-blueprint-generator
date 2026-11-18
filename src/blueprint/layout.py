@@ -14,7 +14,7 @@ from OCP.TopoDS import TopoDS_Shape
 
 from .geometry import Projection, Vec, cross, project
 from .sheet import Sheet, View
-from .style import STANDARD_SCALES
+from .style import PT_PER_MM, STANDARD_SCALES
 
 log = logging.getLogger(__name__)
 
@@ -22,8 +22,12 @@ ORTHO = ("FRONT", "TOP", "BOTTOM", "LEFT", "RIGHT", "BACK")
 ALL_VIEWS = (*ORTHO, "ISOMETRIC")
 DEFAULT_VIEWS = ("FRONT", "TOP", "RIGHT", "ISOMETRIC")  # the usual minimum; the other three are opt-in through `views`
 DEFAULT_ISO_SIZE = 1.0  # isometric scale as a multiple of the main scale; None fills the free space
-ISO_MIN_FRACTION = 0.45  # and at least this fraction of it, or the scale steps down
-EDGE_PAD = 16.0  # sheet mm kept clear inside the border for the outermost dimensions and captions
+ISO_MIN_FRACTION = 0.45  # the isometric beside other views is drawn at least this fraction of the main scale, or the main scale steps down
+ISO_FILL = 0.92  # an isometric drawn alone fills this fraction of the free space
+CLEARANCE = 2.0  # sheet mm between any annotation and the border, title block or revision block
+TEXT_HEIGHT_EM = 1.2  # a line of text is this many font sizes tall, ascender to descender
+MIN_EXTENT = 1e-6  # mm; a view seen exactly edge-on has zero width or height
+REV_ROWS_RESERVED = 2  # the revision block's rows (initial release + current), as Sheet draws it from git
 
 
 AXES: dict[str, Vec] = {"+X": (1, 0, 0), "-X": (-1, 0, 0), "+Y": (0, 1, 0), "-Y": (0, -1, 0), "+Z": (0, 0, 1), "-Z": (0, 0, -1)}
@@ -63,8 +67,17 @@ class AutoLayout:
 
 
 def _size(p: Projection) -> tuple[float, float]:
+    """Width and height of a view's visible outline, never zero (an edge-on face would otherwise divide by zero when scaling)."""
     x0, y0, x1, y1 = p.bounds()
-    return x1 - x0, y1 - y0
+    return max(x1 - x0, MIN_EXTENT), max(y1 - y0, MIN_EXTENT)
+
+
+def _pads(sheet: Sheet) -> tuple[float, float]:
+    """Sheet mm needed below and to the left of a view for its overall dimension and caption, derived from the style, not tuned."""
+    sp, ty = sheet.style.spacing, sheet.style.type
+    caption_mm = ty.caption / PT_PER_MM * TEXT_HEIGHT_EM
+    dim_mm = ty.dim / PT_PER_MM * TEXT_HEIGHT_EM
+    return sp.dim_offset + sp.caption_drop + caption_mm + CLEARANCE, sp.dim_offset + dim_mm + CLEARANCE
 
 
 def auto_sheet(
@@ -78,131 +91,132 @@ def auto_sheet(
 ) -> AutoLayout:
     """Project `shape`, choose the scale, place and draw the views with overall dimensions and captions.
 
-    `views` picks which views appear. Several orthographic views keep their third-angle positions around the front; one view on its own is centred
-    and drawn as large as a standard scale allows (the isometric alone is scaled to fill the space). `iso_size` sets the isometric's scale as a
-    multiple of the main scale when it sits beside other views; None makes it fill the space to their right.
+    `views` picks which views appear, in any combination. Orthographic views keep their third-angle places on a grid (top above, bottom below,
+    left and right beside the centre column, back at the far right) whether or not the front view is among them; one view on its own is centred and
+    drawn as large as a standard scale allows (the isometric alone is scaled to fill the space). `iso_size` sets the isometric's scale as a multiple
+    of the main scale when it sits beside other views; None makes it fill the space to their right.
     """
     captions = {k.upper(): v for k, v in (captions or {}).items()}
-    views = tuple(v.upper() for v in views)
+    views = tuple(dict.fromkeys(v.upper() for v in views))  # drop repeats, keep order
     if unknown := [v for v in views if v not in ALL_VIEWS]:
         raise ValueError(f"unknown views {unknown}; choose from {list(ALL_VIEWS)}")
     if not views:
         raise ValueError("at least one view is needed")
     dirs = view_directions(front, up)
     proj = {name: project(shape, d, u) for name, (d, u) in dirs.items() if name in views}
-    gap = sheet.style.spacing.view_gap
+    below, left = _pads(sheet)
     x0, _, x1, y1 = sheet.inner
     band_top = sheet.title_block_box[3]
-    area = (x0 + EDGE_PAD, band_top + EDGE_PAD, x1 - EDGE_PAD, y1 - EDGE_PAD)
-    rev_h = sheet.rev_block_box(2)[3] - sheet.rev_block_box(2)[1]
+    # Views and their annotations stay inside the border and above the title-block band; the revision block is handled per layout.
+    area = (x0 + left, band_top + below, x1 - CLEARANCE, y1 - CLEARANCE)
+    rev = sheet.rev_block_box(REV_ROWS_RESERVED)
     if len(views) == 1:
-        return _single(sheet, views[0], proj[views[0]], (area[0], area[1], area[2], area[3] - rev_h), captions)
-    return _cross(sheet, proj, area, rev_h, gap, captions, iso_size)
+        return _single(sheet, views[0], proj[views[0]], (area[0], area[1], area[2], rev[1] - CLEARANCE), captions)
+    return _grid(sheet, proj, area, rev, captions, iso_size)
 
 
 def _single(sheet: Sheet, name: str, projection: Projection, area: tuple[float, float, float, float], captions: dict[str, str]) -> AutoLayout:
-    """One view, centred in `area`: an orthographic view at the largest standard scale that leaves room for its dimensions, the isometric to fill."""
-    sp = sheet.style.spacing
+    """One view, centred in `area` (already clear of every annotation and the revision block)."""
     pw, ph = _size(projection)
-    room = sp.dim_offset + 2 * sp.caption_drop  # dimension on the left and below, caption under that
-    aw, ah = area[2] - area[0] - room, area[3] - area[1] - room
+    aw, ah = area[2] - area[0], area[3] - area[1]
     if name == "ISOMETRIC":
-        s = min(aw / pw, ah / ph) * 0.92
+        s = min(aw / pw, ah / ph) * ISO_FILL
     else:
         fitting = [k for k in STANDARD_SCALES if k * pw <= aw and k * ph <= ah]
         if not fitting:
             raise ValueError(f"{name} view does not fit the sheet at any standard scale: use a larger sheet size")
         s = fitting[0]
-    corner = (area[0] + room + (aw - s * pw) / 2, area[1] + room + (ah - s * ph) / 2)
-    is_iso = name == "ISOMETRIC"
-    v = View.at_corner(sheet, projection, corner, s).draw(hidden=not is_iso, centre_marks=not is_iso)
-    if is_iso:
-        v.caption("ISOMETRIC", "not to scale", below=sp.caption_drop)
-    else:
-        v.overall_dims()
-        v.caption(name, captions.get(name, ""))
+    corner = (area[0] + (aw - s * pw) / 2, area[1] + (ah - s * ph) / 2)
+    v = _draw(sheet, name, projection, corner, s, captions)
     log.info("single %s view at scale %.2f", name, s)
     return AutoLayout(s, s, {name: v})
 
 
-def _cross(
+def _draw(sheet: Sheet, name: str, projection: Projection, corner: tuple[float, float], scale: float, captions: dict[str, str]) -> View:
+    """Place, draw and annotate one view."""
+    is_iso = name == "ISOMETRIC"
+    v = View.at_corner(sheet, projection, corner, scale).draw(hidden=not is_iso, centre_marks=not is_iso)
+    if is_iso:
+        v.caption("ISOMETRIC", "not to scale", below=sheet.style.spacing.caption_drop)
+    else:
+        v.overall_dims()
+        v.caption(name, captions.get(name, ""))
+    return v
+
+
+# Grid cells of the third-angle layout: (column, row). Column 1 and row 1 are the centre, where the front view sits when it is drawn.
+CELLS = {"LEFT": (0, 1), "FRONT": (1, 1), "TOP": (1, 0), "BOTTOM": (1, 2), "RIGHT": (2, 1), "BACK": (3, 1)}
+
+
+def _grid(
     sheet: Sheet,
     proj: dict[str, Projection],
     area: tuple[float, float, float, float],
-    rev_h: float,
-    gap: float,
+    rev: tuple[float, float, float, float],
     captions: dict[str, str],
     iso_size: float | None,
 ) -> AutoLayout:
-    """Orthographic views in their third-angle positions around the front, and the isometric (if chosen) in the space to their right."""
+    """Orthographic views on the third-angle grid, and the isometric (if chosen) in the space to their right."""
+    gap = sheet.style.spacing.view_gap
     size = {name: _size(p) for name, p in proj.items()}
+    ortho = [n for n in proj if n != "ISOMETRIC"]
     has_iso = "ISOMETRIC" in proj
-
-    def w(n: str) -> float:
-        return size[n][0] if n in proj and n != "ISOMETRIC" else 0.0
-
-    def h(n: str) -> float:
-        return size[n][1] if n in proj and n != "ISOMETRIC" else 0.0
-
-    def gaps(*names: str) -> float:
-        return gap * sum(1 for n in names if n in proj)
+    cols = sorted({CELLS[n][0] for n in ortho})
+    rows = sorted({CELLS[n][1] for n in ortho})
+    # Each column is as wide as its widest view and each row as tall as its tallest, so the centre column and row hold whether or not FRONT is drawn.
+    col_w = {c: max(size[n][0] for n in ortho if CELLS[n][0] == c) for c in cols}
+    row_h = {r: max(size[n][1] for n in ortho if CELLS[n][1] == r) for r in rows}
+    area_w, area_h = area[2] - area[0], area[3] - area[1]
+    below_rev = rev[1] - CLEARANCE - area[1]  # height available under the revision block
 
     chosen = None
     for s in STANDARD_SCALES:
-        cross_w = s * (w("LEFT") + w("FRONT") + w("RIGHT") + w("BACK")) + gaps("LEFT", "RIGHT", "BACK")
-        cross_h = s * (h("TOP") + h("FRONT") + h("BOTTOM")) + gaps("TOP", "BOTTOM")
-        if cross_h > area[3] - area[1] - (0 if has_iso else rev_h) or cross_w > area[2] - area[0]:
+        grid_w = s * sum(col_w.values()) + gap * (len(cols) - 1)
+        grid_h = s * sum(row_h.values()) + gap * (len(rows) - 1)
+        if grid_w > area_w:
             continue
         if not has_iso:
-            chosen = (s, 0.0, cross_w, cross_h)
-            break
-        iso_w_room = area[2] - area[0] - cross_w - gap
-        iso_h_room = area[3] - area[1] - rev_h
-        if iso_w_room <= 0:
+            left_edge = area[0] + (area_w - grid_w) / 2
+            # Centred grid: it must stay under the revision block if it reaches across under it.
+            room_h = below_rev if left_edge + grid_w > rev[0] - CLEARANCE else area_h
+            if grid_h <= room_h:
+                chosen = (s, 0.0, grid_w, grid_h, left_edge, room_h)
+                break
+            continue
+        iso_w_room = area_w - grid_w - gap
+        if iso_w_room <= 0 or grid_h > (below_rev if area[0] + grid_w > rev[0] - CLEARANCE else area_h):
             continue
         iw, ih = size["ISOMETRIC"]
-        room_s = min(iso_w_room / iw, iso_h_room / ih)
+        room_s = min(iso_w_room / iw, (below_rev - sheet.style.spacing.caption_drop) / ih)
         iso_s = room_s if iso_size is None else min(s * iso_size, room_s)
         if iso_s >= s * ISO_MIN_FRACTION:
-            chosen = (s, iso_s, cross_w, cross_h)
+            chosen = (s, iso_s, grid_w, grid_h, area[0], below_rev if area[0] + grid_w > rev[0] - CLEARANCE else area_h)
             break
     if chosen is None:
         raise ValueError("part does not fit the sheet at any standard scale: use a larger sheet size")
-    s, iso_s, cross_w, cross_h = chosen
+    s, iso_s, grid_w, grid_h, left_edge, room_h = chosen
     log.info("scale %.2f, isometric %.2f", s, iso_s)
 
-    fw, fh = s * w("FRONT"), s * h("FRONT")
-    left_w = s * w("LEFT") + gaps("LEFT")
-    # Without an isometric the cross is centred across the sheet and below the revision block; with one it hugs the left edge.
-    fx = area[0] + left_w + (0 if has_iso else (area[2] - area[0] - cross_w) / 2)
-    fy = area[1] + (area[3] - area[1] - (0 if has_iso else rev_h) - cross_h) / 2 + s * h("BOTTOM") + gaps("BOTTOM")
-    corners: dict[str, tuple[float, float]] = {"FRONT": (fx, fy)} if "FRONT" in proj else {}
-    if "TOP" in proj:
-        corners["TOP"] = (fx + (fw - s * w("TOP")) / 2, fy + fh + gap)
-    if "BOTTOM" in proj:
-        corners["BOTTOM"] = (fx + (fw - s * w("BOTTOM")) / 2, fy - gap - s * h("BOTTOM"))
-    if "LEFT" in proj:
-        corners["LEFT"] = (fx - gap - s * w("LEFT"), fy + (fh - s * h("LEFT")) / 2)
-    right_edge = fx + fw
-    if "RIGHT" in proj:
-        corners["RIGHT"] = (right_edge + gap, fy + (fh - s * h("RIGHT")) / 2)
-        right_edge = corners["RIGHT"][0] + s * w("RIGHT")
-    if "BACK" in proj:
-        corners["BACK"] = (right_edge + gap, fy + (fh - s * h("BACK")) / 2)
+    col_x: dict[int, float] = {}
+    x = left_edge
+    for c in cols:
+        col_x[c] = x
+        x += s * col_w[c] + gap
+    row_y: dict[int, float] = {}
+    y = area[1] + (room_h - grid_h) / 2 + grid_h  # top of the grid, centred vertically in the room it has
+    for r in rows:
+        y -= s * row_h[r]
+        row_y[r] = y
+        y -= gap
+    placed: dict[str, View] = {}
+    for name in ortho:
+        c, r = CELLS[name]
+        w, h = size[name]
+        corner = (col_x[c] + (s * col_w[c] - s * w) / 2, row_y[r] + (s * row_h[r] - s * h) / 2)
+        placed[name] = _draw(sheet, name, proj[name], corner, s, captions)
     if has_iso:
         iw, ih = size["ISOMETRIC"]
-        iso_left = area[0] + cross_w + gap
-        iso_top = area[3] - rev_h
-        corners["ISOMETRIC"] = (iso_left + (area[2] - iso_left - iso_s * iw) / 2, iso_top - iso_s * ih)
-
-    placed: dict[str, View] = {}
-    for name, corner in corners.items():
-        is_iso = name == "ISOMETRIC"
-        v = View.at_corner(sheet, proj[name], corner, iso_s if is_iso else s).draw(hidden=not is_iso, centre_marks=not is_iso)
-        if is_iso:
-            v.caption("ISOMETRIC", "not to scale", below=sheet.style.spacing.caption_drop)
-        else:
-            v.overall_dims()
-            v.caption(name, captions.get(name, ""))
-        placed[name] = v
+        iso_left = left_edge + grid_w + gap
+        corner = (iso_left + (area[2] - iso_left - iso_s * iw) / 2, rev[1] - CLEARANCE - iso_s * ih)
+        placed["ISOMETRIC"] = _draw(sheet, "ISOMETRIC", proj["ISOMETRIC"], corner, iso_s, captions)
     return AutoLayout(s, iso_s, placed)

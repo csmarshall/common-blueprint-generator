@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from .layout import ALL_VIEWS, DEFAULT_ISO_SIZE, DEFAULT_VIEWS
+from .licences import LICENCES, NONCOMMERCIAL_NOTE, Licence, lookup
 from .style import SHEET_SIZES, Toggles
 
 FORMATS = ("png", "svg", "pdf")
@@ -64,6 +65,17 @@ KEYS: tuple[Key, ...] = (
     Key("captions", "map", "{}", "Extra caption text per view, shown in brackets after the view name.", "{front: socket face, top: snap fingers up}"),
     Key("notes", "list", "[]", "General notes, numbered and wrapped in the lower-left corner.", "[Print flat edge down, no supports.]"),
     Key(
+        "licence",
+        "SPDX id or map",
+        "none",
+        "Override for the LICENCE row. Normally omitted: the licence and copyright are read from the repo's REUSE.toml for the drawing's own output "
+        "file, and a render with no REUSE.toml or no matching annotation fails. Set this (an SPDX id) to skip that lookup. "
+        f"Known ids ({', '.join(LICENCES)}) get their label, CC icons or a badge, and deed link; others print as given. Any id containing -NC- adds "
+        f"{NONCOMMERCIAL_NOTE} unless given `{{id: ..., note: ...}}`.",
+        "CC-BY-NC-SA-4.0",
+    ),
+    Key("copyright", "text", "from REUSE.toml", "Copyright line for the LICENCE row when `licence:` overrides the REUSE lookup.", "© 2026 Charles Marshall"),
+    Key(
         "readme",
         "path",
         '""',
@@ -97,6 +109,9 @@ class DrawingConfig:
     source: str = ""
     drawn_by: str = ""
     company: str = ""
+    licence: Licence | None = None
+    licence_note: str | None = None  # None: the licence's default note
+    copyright: str = ""
     front: str = "+Z"
     up: str = "+Y"
     sheet: str = "B"
@@ -111,7 +126,10 @@ class DrawingConfig:
 
 def load(path: Path) -> DrawingConfig:
     """Read and check a blueprint.yml, raising ValueError naming the first problem."""
-    raw: dict[str, Any] = yaml.safe_load(path.read_text()) or {}
+    loaded = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path}: expected a mapping of keys (model:, output:, title:, ...), not {type(loaded).__name__}")
+    raw: dict[str, Any] = loaded
     if unknown := set(raw) - KNOWN:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}; expected some of {sorted(KNOWN)}")
     for key in REQUIRED:
@@ -125,10 +143,12 @@ def load(path: Path) -> DrawingConfig:
     for name, axis in (("front", front), ("up", up)):
         if axis not in AXIS_NAMES:
             raise ValueError(f"{path}: {name} must be one of {list(AXIS_NAMES)}, not {axis!r}")
-    formats = tuple(raw.get("formats", ("png", "svg")))
+    formats = tuple(str(f) for f in _as_list(raw.get("formats", ("png", "svg"))))
+    if not formats:
+        raise ValueError(f"{path}: formats must name at least one of {list(FORMATS)}")
     if bad := [f for f in formats if f not in FORMATS]:
         raise ValueError(f"{path}: unsupported formats {bad}; use {list(FORMATS)}")
-    views = tuple(str(v).upper() for v in raw.get("views") or DEFAULT_VIEWS)
+    views = tuple(dict.fromkeys(str(v).upper() for v in _as_list(raw.get("views") or DEFAULT_VIEWS)))
     if bad_views := [v for v in views if v not in ALL_VIEWS]:
         raise ValueError(f"{path}: unknown views {bad_views}; choose from {[v.lower() for v in ALL_VIEWS]}")
     iso_raw = raw.get("isometric", DEFAULT_ISO_SIZE)
@@ -143,6 +163,9 @@ def load(path: Path) -> DrawingConfig:
     toggle_names = {f.name for f in fields(Toggles)}
     if bad_toggles := set(style) - toggle_names:
         raise ValueError(f"{path}: unknown style switches {sorted(bad_toggles)}; expected some of {sorted(toggle_names)}")
+    if not_bool := [k for k, v in style.items() if not isinstance(v, bool)]:
+        raise ValueError(f"{path}: style switches take true or false, unquoted; check {not_bool}")
+    licence, licence_note = _licence(path, raw.get("licence"))
     return DrawingConfig(
         path=path,
         model=(base / raw["model"]).resolve(),
@@ -154,6 +177,9 @@ def load(path: Path) -> DrawingConfig:
         source=str(raw.get("source", "")),
         drawn_by=str(raw.get("drawn_by", "")),
         company=str(raw.get("company", "")),
+        licence=licence,
+        licence_note=licence_note,
+        copyright=str(raw.get("copyright", "")),
         front=front,
         up=up,
         sheet=sheet,
@@ -163,5 +189,20 @@ def load(path: Path) -> DrawingConfig:
         readme=(base / raw["readme"]).resolve() if raw.get("readme") else None,
         captions={str(k).upper(): str(v) for k, v in (raw.get("captions") or {}).items()},
         notes=[str(n) for n in raw.get("notes") or []],
-        toggles=Toggles(**{k: bool(v) for k, v in style.items()}),
+        toggles=Toggles(**style),
     )
+
+
+def _as_list(value: Any) -> list[Any]:
+    """A YAML list as given, or a lone scalar (views: top) as a one-item list."""
+    return list(value) if isinstance(value, list | tuple) else [value]
+
+
+def _licence(path: Path, value: Any) -> tuple[Licence | None, str | None]:
+    """`licence: CC-BY-NC-SA-4.0` or `licence: {id: CC-BY-NC-SA-4.0, note: ...}` as (licence, note override)."""
+    if value is None or value == "":
+        return None, None
+    spdx, note = (value.get("id"), value.get("note")) if isinstance(value, dict) else (value, None)
+    if not spdx:
+        raise ValueError(f"{path}: licence: needs an SPDX id, e.g. licence: CC-BY-NC-SA-4.0 or licence: {{id: MIT, note: ...}}")
+    return lookup(str(spdx)), None if note is None else str(note)

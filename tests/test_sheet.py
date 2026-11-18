@@ -19,7 +19,7 @@ from blueprint.style import fmt, scale_label
 
 def _config(tmp_path: Path, model: Path, extra: str = "") -> Path:
     cfg = tmp_path / "blueprint.yml"
-    cfg.write_text(f"model: {model.name}\noutput: out/sheet\ntitle: TEST BLOCK\ncompany: Test Works\nformats: [svg]\n{extra}")
+    cfg.write_text(f"model: {model.name}\noutput: out/sheet\ntitle: TEST BLOCK\ncompany: Test Works\nlicence: MIT\nformats: [svg]\n{extra}")
     return cfg
 
 
@@ -106,7 +106,7 @@ def test_cli_renders_svg(tmp_path: Path, block_step: Path) -> None:
 
 def test_cli_reports_failure(tmp_path: Path) -> None:
     cfg = tmp_path / "blueprint.yml"
-    cfg.write_text("model: missing.step\noutput: out/x\ntitle: X\n")
+    cfg.write_text("model: missing.step\noutput: out/x\ntitle: X\nlicence: MIT\n")
     assert main(["render", str(cfg)]) == 1
 
 

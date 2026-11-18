@@ -1,0 +1,31 @@
+# Dogfood: on every merge to main this repo renders its own README example with the reusable workflow (at the commit being pushed), then
+# releases itself: a patch version every merge, minor or major when dispatched by hand, and the v1 tag moved so callers pinning @v1 follow.
+name: Publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump for this release
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    uses: ./.github/workflows/render.yml
+    with:
+      configs: examples/blueprint.yml
+      generator-ref: ${{ github.sha }}
+      commit-paths: examples README.md
+  release:
+    needs: render
+    uses: ./.github/workflows/release.yml
+    with:
+      bump: ${{ inputs.bump || 'patch' }}
+      move-major-tag: true

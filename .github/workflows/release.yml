@@ -1,0 +1,125 @@
+# Reusable workflow: cut a release on every merge to main.
+#
+# Every run is a patch release (v1.4.2 -> v1.4.3). Minor and major bumps are a deliberate choice: run the caller's workflow by hand
+# (workflow_dispatch) with bump: minor or bump: major. The first release of a repo with no v* tag is initial-version.
+#
+# Assets: <repo>-source-vX.Y.Z.zip (git archive of the tagged commit) always, and <repo>-prints-vX.Y.Z.zip when prints-paths is given: the
+# print files plus LICENSES/, REUSE.toml, any LICENSE* and README.md, so a prints-only download still carries its licences.
+#
+# Caller example, after the blueprint render so the zip carries the fresh drawing:
+#
+#   jobs:
+#     blueprint:
+#       uses: csmarshall/common-blueprint-generator/.github/workflows/render.yml@v1
+#       with: { ... }
+#     release:
+#       needs: blueprint
+#       uses: csmarshall/common-blueprint-generator/.github/workflows/release.yml@v1
+#       with:
+#         bump: ${{ inputs.bump || 'patch' }}
+#         prints-paths: prints docs/images/blueprint_dock.svg
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      bump:
+        description: patch (every merge), or minor / major when chosen by hand.
+        type: string
+        default: patch
+      prints-paths:
+        description: Space-separated files or directories for the prints-only zip; empty means no prints zip.
+        type: string
+        default: ""
+      initial-version:
+        description: Version of the first release when the repo has no v* tag yet.
+        type: string
+        default: "1.0.0"
+      move-major-tag:
+        description: Also point vMAJOR (e.g. v1) at the release, so callers can pin a major version.
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: github.ref_type == 'branch' && github.event_name != 'pull_request'
+    env:
+      BUMP: ${{ inputs.bump }}
+      PRINTS_PATHS: ${{ inputs.prints-paths }}
+      INITIAL_VERSION: ${{ inputs.initial-version }}
+      MOVE_MAJOR: ${{ inputs.move-major-tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }} # the tip, including a blueprint commit made earlier in the same run
+          fetch-depth: 0
+      - name: Work out the version
+        id: version
+        run: |
+          set -euo pipefail
+          case "$BUMP" in patch|minor|major) ;; *) echo "::error::bump must be patch, minor or major, not '$BUMP'"; exit 1 ;; esac
+          last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n1)
+          if [ -z "$last" ]; then
+            next="v${INITIAL_VERSION}"
+          else
+            if git tag --points-at HEAD | grep -qx "$last"; then
+              echo "HEAD is already released as $last"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            IFS=. read -r major minor patch <<< "${last#v}"
+            case "$BUMP" in
+              major) next="v$((major + 1)).0.0" ;;
+              minor) next="v${major}.$((minor + 1)).0" ;;
+              patch) next="v${major}.${minor}.$((patch + 1))" ;;
+            esac
+          fi
+          {
+            echo "previous=${last}"
+            echo "tag=${next}"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
+          echo "releasing ${next} (${BUMP} after ${last:-nothing})"
+      - name: Build the zips
+        if: steps.version.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY#*/}"
+          mkdir -p dist
+          git archive --format=zip --prefix="${repo}-${TAG}/" -o "dist/${repo}-source-${TAG}.zip" HEAD
+          if [ -n "$PRINTS_PATHS" ]; then
+            # shellcheck disable=SC2086 # PRINTS_PATHS is a deliberate word list
+            files=$(git ls-files -- $PRINTS_PATHS 'LICENSE*' 'LICENCE*' LICENSES REUSE.toml README.md)
+            if [ -z "$files" ]; then echo "::error::prints-paths matched no tracked files: $PRINTS_PATHS"; exit 1; fi
+            printf '%s\n' "$files" | zip -q -@ "dist/${repo}-prints-${TAG}.zip"
+            echo "prints zip: $(printf '%s\n' "$files" | wc -l) files"
+          fi
+          ls -la dist
+      - name: Tag and publish
+        if: steps.version.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+          notes_from=()
+          if [ -n "$PREVIOUS" ]; then notes_from=(--notes-start-tag "$PREVIOUS"); fi
+          gh release create "$TAG" dist/*.zip --title "$TAG" --generate-notes "${notes_from[@]}" --verify-tag
+          if [ "$MOVE_MAJOR" = "true" ]; then
+            major="${TAG%%.*}"
+            git tag -fa "$major" -m "$major -> $TAG"
+            git push -f origin "$major"
+          fi

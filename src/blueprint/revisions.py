@@ -40,10 +40,12 @@ def _git(repo: Path, *args: str) -> str | None:
 
 def git_dates(repo: Path) -> GitDates:
     """First-commit date, HEAD and dirtiness of the repository containing `repo`; fields are None outside a git checkout."""
-    first = _git(repo, "log", "--reverse", "--format=%cs", "--max-parents=0", "HEAD")
+    # Author dates of every root commit (a repo can have several, e.g. after merging an unrelated history); the earliest is the start. Author date,
+    # not committer date, so rebasing or amending later does not move it.
+    roots = _git(repo, "log", "--format=%as", "--max-parents=0", "HEAD")
     if _git(repo, "rev-parse", "--is-shallow-repository") == "true":
         log.warning("%s is a shallow clone: STARTED shows the clone boundary, not the first commit (check out with fetch-depth: 0)", repo)
-    started = date.fromisoformat(first.splitlines()[0]) if first else None
+    started = min(date.fromisoformat(d) for d in roots.splitlines()) if roots else None
     head = _git(repo, "rev-parse", "--short=7", "HEAD")
     dirty = bool(_git(repo, "status", "--porcelain", "--untracked-files=no"))
     return GitDates(started, head, dirty)

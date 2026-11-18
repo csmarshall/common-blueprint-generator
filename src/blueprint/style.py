@@ -23,9 +23,9 @@ class SheetSize:
     wink: str  # what the SIZE field says after the name
 
 
-# US drawing sizes (ASME Y14.1). B is the default: the closest to the A3 the bracket sheet used.
+# US drawing sizes (ASME Y14.1). B is the default: the closest to the A3 the bracket sheet used. A (8.5 x 11) is not offered: the title block and
+# tolerance column alone are 262 mm wide, wider than A's 255 mm inside the border.
 SHEET_SIZES = {
-    "A": SheetSize("A", 279.4, 215.9, "8.5 × 11, THE PRINTER ONE"),
     "B": SheetSize("B", 431.8, 279.4, "11 × 17, THE TABLOID ONE"),
     "C": SheetSize("C", 558.8, 431.8, "17 × 22, THE PLOTTER ONE"),
 }

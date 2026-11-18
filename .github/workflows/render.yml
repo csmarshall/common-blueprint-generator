@@ -1,19 +1,21 @@
 # Reusable workflow: re-render a caller repo's blueprint sheets and commit them (and any README embeds) back.
 #
-# Caller example (.github/workflows/blueprint.yml in the part's repo):
+# Caller example (.github/workflows/publish.yml in the part's repo):
 #
 #   on:
 #     push:
 #       branches: [main]
-#       paths: ["u1/**", "chip/**", "blueprint.yml"]
+#       paths: ["u1/**", "chip/**", "tools/export_step.py"]
 #     workflow_dispatch:
 #   permissions:
 #     contents: write
 #   jobs:
 #     blueprint:
-#       uses: csmarshall/common-blueprint-generator/.github/workflows/render.yml@main
+#       uses: csmarshall/common-blueprint-generator/.github/workflows/render.yml@v1
 #       with:
 #         export-command: uv run --locked python tools/export_step.py
+#         configs: build/blueprint.yml
+#         commit-paths: docs/images README.md
 #
 # Commits pushed with the default GITHUB_TOKEN do not trigger further workflow runs, so the render commit cannot loop.
 name: Render blueprints
@@ -36,16 +38,16 @@ on:
       generator-ref:
         description: Branch, tag or sha of common-blueprint-generator to render with.
         type: string
-        default: main
+        default: v1
       python-version:
         type: string
         default: "3.12"
       commit-paths:
-        description: Space-separated paths whose changes are committed back (the sheets and README).
+        description: Space-separated paths whose changes are committed back (the sheets and README). Required, so export output is never swept up.
         type: string
-        default: "."
+        required: true
       commit:
-        description: Commit and push the result; false only checks that rendering works.
+        description: Commit and push the result; false only checks that rendering works. Nothing is committed outside a branch push.
         type: boolean
         default: true
 
@@ -60,44 +62,63 @@ jobs:
   render:
     runs-on: ubuntu-latest
     env:
-      BLUEPRINT_PACKAGE: "common-blueprint-generator @ git+https://github.com/csmarshall/common-blueprint-generator@${{ inputs.generator-ref }}"
+      BLUEPRINT_PACKAGE: "common-blueprint-generator[reuse] @ git+https://github.com/csmarshall/common-blueprint-generator@${{ inputs.generator-ref }}"
       BLUEPRINT_LOG_LEVEL: INFO
+      CONFIGS: ${{ inputs.configs }}
+      EXPORT_COMMAND: ${{ inputs.export-command }}
+      RENDER_COMMAND: ${{ inputs.render-command }}
+      GENERATOR_REF: ${{ inputs.generator-ref }}
+      COMMIT_PATHS: ${{ inputs.commit-paths }}
+      # Commit only on a push to a branch: pull_request refs (5/merge) and tags have nowhere to push to.
+      DO_COMMIT: ${{ inputs.commit && github.ref_type == 'branch' && github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # On a push, the branch tip rather than the triggering sha: runs are serialised, so this includes any render a previous run committed.
+          ref: ${{ github.event_name == 'pull_request' && github.sha || github.ref_name }}
           fetch-depth: 0 # STARTED is the first commit's date; a shallow clone would report the clone boundary instead
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.9"
           python-version: ${{ inputs.python-version }}
           enable-cache: true
-      - name: Export STEP
-        if: inputs.export-command != ''
-        run: ${{ inputs.export-command }}
-      - name: Render (CLI)
-        if: inputs.render-command == ''
-        env:
-          CONFIGS: ${{ inputs.configs }}
-          GENERATOR_REF: ${{ inputs.generator-ref }}
+      - name: Render and commit
         run: |
-          # shellcheck disable=SC2086 # CONFIGS is a deliberate word list
-          uvx --from "common-blueprint-generator[ocp] @ git+https://github.com/csmarshall/common-blueprint-generator@${GENERATOR_REF}" blueprint render $CONFIGS
-      - name: Render (Python layout)
-        if: inputs.render-command != ''
-        run: ${{ inputs.render-command }}
-      - name: Commit changed sheets
-        if: inputs.commit
-        env:
-          COMMIT_PATHS: ${{ inputs.commit-paths }}
-        run: |
-          # shellcheck disable=SC2086 # COMMIT_PATHS is a deliberate word list
-          git add --all -- $COMMIT_PATHS
-          if git diff --cached --quiet; then
-            echo "blueprints unchanged"
+          set -euo pipefail
+          render() {
+            if [ -n "$EXPORT_COMMAND" ]; then bash -euo pipefail -c "$EXPORT_COMMAND"; fi
+            if [ -n "$RENDER_COMMAND" ]; then
+              bash -euo pipefail -c "$RENDER_COMMAND"
+            else
+              # shellcheck disable=SC2086 # CONFIGS is a deliberate word list
+              uvx --from "common-blueprint-generator[ocp,reuse] @ git+https://github.com/csmarshall/common-blueprint-generator@${GENERATOR_REF}" blueprint render $CONFIGS
+            fi
+          }
+          render
+          if [ "$DO_COMMIT" != "true" ]; then
+            echo "not a branch push (or commit: false): rendered only"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "blueprint: re-render from ${GITHUB_SHA::7}"
-          git pull --rebase origin "${GITHUB_REF_NAME}"  # the branch may have moved during the render
-          git push
+          branch="${GITHUB_REF_NAME}"
+          for attempt in 1 2 3; do
+            # shellcheck disable=SC2086 # COMMIT_PATHS is a deliberate word list
+            git add --all -- $COMMIT_PATHS
+            if git diff --cached --quiet; then
+              echo "blueprints unchanged"
+              exit 0
+            fi
+            git commit -q -m "blueprint: re-render from $(git rev-parse --short=7 HEAD)"
+            if git push origin "HEAD:${branch}"; then
+              exit 0
+            fi
+            # Someone pushed while we rendered. Generated files are only right when rendered from the tip, so reset to it and render again rather
+            # than trying to merge two renders.
+            echo "push rejected (attempt ${attempt}): re-rendering from the new tip of ${branch}"
+            git fetch -q origin "${branch}"
+            git reset -q --hard "origin/${branch}"
+            render
+          done
+          echo "::error::could not push the re-rendered blueprints after 3 attempts"
+          exit 1
