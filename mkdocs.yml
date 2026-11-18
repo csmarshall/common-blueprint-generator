@@ -1,0 +1,41 @@
+# Read by Zensical (zensical build / zensical serve); the file keeps its MkDocs name, which Zensical supports.
+site_name: common-blueprint-generator
+site_description: Third-angle blueprint sheets of 3D-printed parts, drawn from STEP by hidden-line projection
+repo_url: https://github.com/csmarshall/common-blueprint-generator
+edit_uri: ""
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle: {icon: material/brightness-7, name: Dark mode}
+    - scheme: slate
+      primary: indigo
+      toggle: {icon: material/brightness-4, name: Light mode}
+  features: [navigation.sections, content.code.copy]
+nav:
+  - Overview: index.md
+  - Gallery: gallery.md
+  - blueprint.yml reference: config-reference.md
+  - House style reference: style-reference.md
+  - Python API: api.md
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.superfences
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            members_order: source
+            separate_signature: true
+            show_signature_annotations: true

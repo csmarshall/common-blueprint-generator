@@ -27,6 +27,7 @@ from matplotlib.path import Path as MplPath  # noqa: E402
 from scipy.ndimage import gaussian_filter  # noqa: E402
 
 from .geometry import Polyline, Projection  # noqa: E402
+from .readme import PROJECT_NAME, PROJECT_URL  # noqa: E402
 from .style import PT_PER_MM, SHEET_SIZES, SheetSize, Style, fmt, scale_label  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -239,6 +240,18 @@ class Sheet:
         self.text(x0 + 3, top - TITLE_HEAD_H / 2, info.title, ty.title, va="center", weight="bold")
         if st.toggles.winks:
             self.text(x1, y0 - st.spacing.border_gap - 1.2, "DRAWN PER ASME Y14.5 (MOSTLY)", ty.label, pal.dim, ha="right", va="top")
+        if st.toggles.credit:
+            url = PROJECT_URL.removeprefix("https://")
+            self.text(
+                self.inner[0],
+                y0 - st.spacing.border_gap - 1.2,
+                f"DRAWN WITH {PROJECT_NAME.upper()} · {url}",
+                ty.label,
+                pal.dim,
+                ha="left",
+                va="top",
+                url=PROJECT_URL,
+            )
         self._side_column(info)
         self._revision_block(info)
         if st.toggles.stamp and info.company:
@@ -334,12 +347,18 @@ class Sheet:
 
     # ------------------------------------------------------------------ output
     def save(self, stem: Path, formats: Sequence[str] = ("png", "svg"), dpi: int = PNG_DPI) -> list[Path]:
-        """Write the sheet as stem.<format> for each format and close the figure."""
+        """Write the sheet as stem.<format> for each format and close the figure.
+
+        Output is byte-stable for the same drawing on the same toolchain (fixed SVG id salt, no creation date in the metadata), so a re-render that
+        changes nothing commits nothing.
+        """
         stem.parent.mkdir(parents=True, exist_ok=True)
         written = []
+        no_dates: dict[str, dict[str, str | None]] = {"svg": {"Date": None}, "pdf": {"CreationDate": None, "ModDate": None}, "png": {}}
         for ext in formats:
             path = stem.with_suffix(f".{ext}")
-            self.fig.savefig(path, dpi=dpi if ext == "png" else None, facecolor=self.style.palette.paper)
+            with plt.rc_context({"svg.hashsalt": "common-blueprint-generator"}):
+                self.fig.savefig(path, dpi=dpi if ext == "png" else None, facecolor=self.style.palette.paper, metadata=no_dates.get(ext, {}))
             log.info("wrote %s (%d KiB)", path, path.stat().st_size // 1024)
             written.append(path)
         plt.close(self.fig)

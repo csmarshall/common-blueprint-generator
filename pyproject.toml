@@ -24,6 +24,7 @@ blueprint = "blueprint.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.8", "mypy>=1.13", "types-pyyaml", "pip-audit"]
+docs = ["zensical>=0.1.2", "mkdocstrings[python]>=0.29"]
 
 [build-system]
 requires = ["hatchling>=1.25"]

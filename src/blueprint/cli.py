@@ -16,6 +16,7 @@ from pathlib import Path
 from .config import DrawingConfig, load
 from .geometry import load_shape
 from .layout import auto_sheet
+from .readme import embed, update
 from .revisions import GitDates, git_dates, revisions
 from .sheet import Sheet, TitleInfo
 from .style import Style
@@ -47,7 +48,11 @@ def render(cfg: DrawingConfig, dates: GitDates, rendered: date | None = None) ->
     layout = auto_sheet(sheet, load_shape(cfg.model), cfg.front, cfg.up, cfg.captions, cfg.views, cfg.isometric)
     sheet.title_block(title_info(cfg, rendered, dates), layout.scale)
     sheet.notes(cfg.notes)
-    return sheet.save(cfg.output, cfg.formats)
+    written = sheet.save(cfg.output, cfg.formats)
+    if cfg.readme:
+        image = next((p for p in written if p.suffix == ".svg"), written[0])  # the scalable copy when there is one
+        update(cfg.readme, cfg.output.name, embed(cfg.readme, image, cfg.title, cfg.model))
+    return written
 
 
 def main(argv: list[str] | None = None) -> int:

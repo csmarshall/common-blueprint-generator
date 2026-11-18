@@ -42,6 +42,7 @@ class Toggles:
     grid: bool = False  # faint 10 mm graph grid
     stamp: bool = True  # the approved rubber stamp
     winks: bool = True  # deadpan captions on the projection symbol, size field, centring marks, standards footer and tolerance block
+    credit: bool = True  # a small line in the bottom margin naming and linking the generator
 
 
 @dataclass(frozen=True)

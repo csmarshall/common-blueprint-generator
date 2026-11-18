@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -107,3 +108,39 @@ def test_cli_reports_failure(tmp_path: Path) -> None:
     cfg = tmp_path / "blueprint.yml"
     cfg.write_text("model: missing.step\noutput: out/x\ntitle: X\n")
     assert main(["render", str(cfg)]) == 1
+
+
+def test_readme_embed_is_rewritten_between_markers(tmp_path: Path, block_step: Path) -> None:
+    readme = tmp_path / "README.md"
+    readme.write_text("# Part\n\nIntro.\n\n<!-- blueprint:sheet -->\nold image\n<!-- /blueprint -->\n\nMore text.\n")
+    cfg = _config(tmp_path, block_step, "readme: README.md\nviews: [front]\n")
+    assert main(["render", str(cfg)]) == 0
+    text = readme.read_text()
+    assert "old image" not in text and text.startswith("# Part\n\nIntro.\n") and text.endswith("More text.\n")
+    assert "[![TEST BLOCK](out/sheet.svg)](out/sheet.svg)" in text
+    assert "common-blueprint-generator](https://github.com/csmarshall/common-blueprint-generator)" in text
+    assert "`block.step`" in text
+    assert main(["render", str(cfg)]) == 0
+    assert readme.read_text() == text  # a re-render with nothing changed leaves the README alone
+
+
+def test_readme_without_markers_is_an_error_not_an_insertion(tmp_path: Path, block_step: Path) -> None:
+    readme = tmp_path / "README.md"
+    readme.write_text("# Part\n")
+    cfg = _config(tmp_path, block_step, "readme: README.md\nviews: [front]\n")
+    assert main(["render", str(cfg)]) == 1
+    assert readme.read_text() == "# Part\n"
+
+
+def test_svg_is_byte_stable(tmp_path: Path, block_step: Path) -> None:
+    cfg = _config(tmp_path, block_step, "views: [front]\n")
+    main(["render", str(cfg)])
+    first = (tmp_path / "out" / "sheet.svg").read_bytes()
+    main(["render", str(cfg)])
+    assert (tmp_path / "out" / "sheet.svg").read_bytes() == first
+
+
+def test_generated_docs_are_current() -> None:
+    root = Path(__file__).resolve().parent.parent
+    done = subprocess.run([sys.executable, str(root / "tools" / "gen_docs.py"), "--check"], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr

@@ -1,0 +1,103 @@
+# Reusable workflow: re-render a caller repo's blueprint sheets and commit them (and any README embeds) back.
+#
+# Caller example (.github/workflows/blueprint.yml in the part's repo):
+#
+#   on:
+#     push:
+#       branches: [main]
+#       paths: ["u1/**", "chip/**", "blueprint.yml"]
+#     workflow_dispatch:
+#   permissions:
+#     contents: write
+#   jobs:
+#     blueprint:
+#       uses: csmarshall/common-blueprint-generator/.github/workflows/render.yml@main
+#       with:
+#         export-command: uv run --locked python tools/export_step.py
+#
+# Commits pushed with the default GITHUB_TOKEN do not trigger further workflow runs, so the render commit cannot loop.
+name: Render blueprints
+
+on:
+  workflow_call:
+    inputs:
+      configs:
+        description: Space-separated blueprint.yml paths to render with the CLI.
+        type: string
+        default: blueprint.yml
+      export-command:
+        description: Shell command run first, in the caller's checkout, to write the STEP file(s) the configs point at.
+        type: string
+        default: ""
+      render-command:
+        description: Replaces the CLI render for drawings laid out in Python; $BLUEPRINT_PACKAGE holds a pip requirement for the generator.
+        type: string
+        default: ""
+      generator-ref:
+        description: Branch, tag or sha of common-blueprint-generator to render with.
+        type: string
+        default: main
+      python-version:
+        type: string
+        default: "3.12"
+      commit-paths:
+        description: Space-separated paths whose changes are committed back (the sheets and README).
+        type: string
+        default: "."
+      commit:
+        description: Commit and push the result; false only checks that rendering works.
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: blueprint-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    env:
+      BLUEPRINT_PACKAGE: "common-blueprint-generator @ git+https://github.com/csmarshall/common-blueprint-generator@${{ inputs.generator-ref }}"
+      BLUEPRINT_LOG_LEVEL: INFO
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # STARTED is the first commit's date; a shallow clone would report the clone boundary instead
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          python-version: ${{ inputs.python-version }}
+          enable-cache: true
+      - name: Export STEP
+        if: inputs.export-command != ''
+        run: ${{ inputs.export-command }}
+      - name: Render (CLI)
+        if: inputs.render-command == ''
+        env:
+          CONFIGS: ${{ inputs.configs }}
+          GENERATOR_REF: ${{ inputs.generator-ref }}
+        run: |
+          # shellcheck disable=SC2086 # CONFIGS is a deliberate word list
+          uvx --from "common-blueprint-generator[ocp] @ git+https://github.com/csmarshall/common-blueprint-generator@${GENERATOR_REF}" blueprint render $CONFIGS
+      - name: Render (Python layout)
+        if: inputs.render-command != ''
+        run: ${{ inputs.render-command }}
+      - name: Commit changed sheets
+        if: inputs.commit
+        env:
+          COMMIT_PATHS: ${{ inputs.commit-paths }}
+        run: |
+          # shellcheck disable=SC2086 # COMMIT_PATHS is a deliberate word list
+          git add --all -- $COMMIT_PATHS
+          if git diff --cached --quiet; then
+            echo "blueprints unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "blueprint: re-render from ${GITHUB_SHA::7}"
+          git pull --rebase origin "${GITHUB_REF_NAME}"  # the branch may have moved during the render
+          git push

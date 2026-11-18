@@ -1,0 +1,17 @@
+# The README's example sheet, rendered by this repo's own workflow: the generator drawing itself into its README.
+model: block.step
+output: block
+title: TEST BLOCK
+drawing_number: EX-001
+for: the README
+material: PLA is fine here
+source: tests/conftest.py (notched_block)
+drawn_by: THE GENERATOR
+company: Example Works
+readme: ../README.md
+formats: [svg, png]
+captions:
+  front: notch top right
+notes:
+  - The asymmetric block the test suite checks handedness against.
+  - Every dimension is measured from the projection, not typed.
