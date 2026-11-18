@@ -1,0 +1,60 @@
+[project]
+name = "common-blueprint-generator"
+version = "0.1.0"
+description = "Third-angle blueprint sheets of 3D-printed parts, drawn by hidden-line projection of a STEP (or STL) file"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11,<3.14"
+# OCP is required, but the right wheel depends on the caller: cadquery 2.8 pins cadquery-ocp<8 (with VTK), build123d 0.13 uses cadquery-ocp-novtk 8.x.
+# Both depend on cadquery-ocp-proxy at their own version, so depending on the proxy means "some OCP >= 7.9.3 is installed" without picking one and
+# installing a second OCP over the caller's. Standalone installs (and the reusable workflow) take the `ocp` extra.
+dependencies = [
+    "cadquery-ocp-proxy>=7.9.3.1",
+    "matplotlib>=3.9",
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+ocp = ["cadquery-ocp-novtk>=7.9.3.1"]
+
+[project.scripts]
+blueprint = "blueprint.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.8", "mypy>=1.13", "types-pyyaml", "pip-audit"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/blueprint"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 160
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "D"]
+ignore = ["D203", "D213", "D105", "D107"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+# OCP ships no type stubs.
+[[tool.mypy.overrides]]
+module = ["OCP.*", "scipy.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
