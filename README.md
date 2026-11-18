@@ -12,7 +12,7 @@ Point it at a STEP file and it draws a third-angle drawing on an ANSI B sheet: h
 <!-- blueprint:block -->
 [![TEST BLOCK](examples/block.svg)](examples/block.svg)
 
-<sub>Drawing generated from `examples/block.step` by [common-blueprint-generator](https://github.com/csmarshall/common-blueprint-generator) on every change to the model.</sub>
+<sub>Drawing generated from `tests/conftest.py (notched_block)` by [common-blueprint-generator](https://github.com/csmarshall/common-blueprint-generator) on every change to the model · [Buy me a coffee](https://buymeacoffee.com/cs_marshall)</sub>
 <!-- /blueprint -->
 
 **Docs:** [csmarshall.github.io/common-blueprint-generator](https://csmarshall.github.io/common-blueprint-generator/): gallery, [blueprint.yml reference](docs/config-reference.md), [house style reference](docs/style-reference.md) and the Python API. All of it is generated from the code, and CI fails if a committed reference is out of date.
