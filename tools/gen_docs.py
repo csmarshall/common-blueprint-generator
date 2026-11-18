@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 from blueprint import style as style_module  # noqa: E402
 from blueprint.config import KEYS  # noqa: E402
 from blueprint.layout import auto_sheet  # noqa: E402
+from blueprint.licences import lookup  # noqa: E402
 from blueprint.revisions import GitDates, revisions  # noqa: E402
 from blueprint.sheet import Sheet, TitleInfo  # noqa: E402
 
@@ -150,6 +151,8 @@ def render_gallery() -> None:
                 started=dates.started,
                 updated=EXAMPLE_DATE,
                 revisions=revisions(dates, EXAMPLE_DATE),
+                licence=lookup("MIT" if name == "plain" else "CC-BY-NC-SA-4.0"),
+                copyright="© 2026 Example Works",
             ),
             layout.scale,
         )

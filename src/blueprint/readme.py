@@ -20,6 +20,7 @@ from pathlib import Path
 
 PROJECT_NAME = "common-blueprint-generator"
 PROJECT_URL = "https://github.com/csmarshall/common-blueprint-generator"
+SUPPORT_URL = "https://buymeacoffee.com/cs_marshall"
 
 log = logging.getLogger(__name__)
 
@@ -29,11 +30,15 @@ def markers(name: str) -> tuple[str, str]:
     return f"<!-- blueprint:{name} -->", "<!-- /blueprint -->"
 
 
-def embed(readme: Path, image: Path, title: str, model: Path) -> str:
-    """The Markdown that goes between the markers: the image linked to itself at full size, then the credit line."""
+def embed(readme: Path, image: Path, title: str, source: str | Path) -> str:
+    """The Markdown that goes between the markers: the image linked to itself at full size, then the credit line.
+
+    `source` names what the drawing is generated from: a path (shown relative to the README) or text such as "u1/u1_parts.py".
+    """
     rel = Path(os.path.relpath(image, readme.parent)).as_posix()
-    source = Path(os.path.relpath(model, readme.parent)).as_posix()
-    return f"[![{title}]({rel})]({rel})\n\n<sub>Drawing generated from `{source}` by [{PROJECT_NAME}]({PROJECT_URL}) on every change to the model.</sub>"
+    source = Path(os.path.relpath(source, readme.parent)).as_posix() if isinstance(source, Path) else source
+    credit = f"Drawing generated from `{source}` by [{PROJECT_NAME}]({PROJECT_URL}) on every change to the model · [Buy me a coffee]({SUPPORT_URL})"
+    return f"[![{title}]({rel})]({rel})\n\n<sub>{credit}</sub>"
 
 
 def update(readme: Path, name: str, content: str) -> bool:

@@ -1,6 +1,6 @@
 [project]
 name = "common-blueprint-generator"
-version = "0.1.0"
+dynamic = ["version"]  # from the vX.Y.Z git tag the release workflow cuts
 description = "Third-angle blueprint sheets of 3D-printed parts, drawn by hidden-line projection of a STEP (or STL) file"
 readme = "README.md"
 license = "MIT"
@@ -14,21 +14,28 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.12",
     "pyyaml>=6.0",
+    "svgpath2mpl>=1.0",
 ]
 
 [project.optional-dependencies]
 ocp = ["cadquery-ocp-novtk>=7.9.3.1"]
+# Reads each drawing's licence from REUSE.toml. GPL-3.0-or-later, hence optional for this MIT package; the reusable workflow always installs it.
+reuse = ["reuse>=6.3"]
 
 [project.scripts]
 blueprint = "blueprint.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.8", "mypy>=1.13", "types-pyyaml", "pip-audit"]
+dev = ["reuse>=6.3", "pytest>=8", "ruff>=0.8", "mypy>=1.13", "types-pyyaml", "pip-audit"]
 docs = ["zensical>=0.1.2", "mkdocstrings[python]>=0.29"]
 
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling>=1.25", "hatch-vcs>=0.4"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options = { fallback_version = "0.0.0" }  # shallow checkouts without tags (CI) still build
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/blueprint"]
@@ -54,7 +61,7 @@ strict = true
 mypy_path = "src"
 # OCP ships no type stubs.
 [[tool.mypy.overrides]]
-module = ["OCP.*", "scipy.*"]
+module = ["OCP.*", "scipy.*", "svgpath2mpl.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

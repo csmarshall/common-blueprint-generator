@@ -17,12 +17,14 @@ One `blueprint.yml` per drawing. Paths are relative to the file. Unknown keys ar
 | `company` | text | "" | Name on the approved stamp. No stamp is drawn without one. | `company: Shermer Works` |
 | `front` | axis | "+Z" | Model axis pointing at the viewer in the front view: one of +X, -X, +Y, -Y, +Z, -Z. | `front: "+Z"` |
 | `up` | axis | "+Y" | Model axis pointing up the page in the front view; must be perpendicular to `front`. | `up: "+Y"` |
-| `sheet` | size | "B" | ANSI sheet size: one of A, B, C. | `sheet: "B"` |
+| `sheet` | size | "B" | ANSI sheet size: one of B, C. | `sheet: "B"` |
 | `formats` | list | [png, svg] | Output formats, any of png, svg, pdf. SVG is the scalable copy; PNG is a preview. | `formats: [svg]` |
 | `views` | list | [front, top, right, isometric] | Which views to draw, any of front, top, bottom, left, right, back, isometric. Several keep their third-angle places around the front; one on its own is centred and drawn as large as a standard scale allows. | `views: [top]` |
 | `isometric` | number or fill | 1 | Isometric scale as a multiple of the main scale when it sits beside other views, or `fill` to fill the space to their right. | `isometric: 1.6` |
 | `captions` | map | {} | Extra caption text per view, shown in brackets after the view name. | `captions: {front: socket face, top: snap fingers up}` |
 | `notes` | list | [] | General notes, numbered and wrapped in the lower-left corner. | `notes: [Print flat edge down, no supports.]` |
+| `licence` | SPDX id or map | none | Override for the LICENCE row. Normally omitted: the licence and copyright are read from the repo's REUSE.toml for the drawing's own output file, and a render with no REUSE.toml or no matching annotation fails. Set this (an SPDX id) to skip that lookup. Known ids (CC-BY-4.0, CC-BY-SA-4.0, CC-BY-ND-4.0, CC-BY-NC-4.0, CC-BY-NC-SA-4.0, CC-BY-NC-ND-4.0, CC0-1.0, MIT, Apache-2.0, BSD-3-Clause, GPL-3.0-or-later, CERN-OHL-S-2.0) get their label, CC icons or a badge, and deed link; others print as given. Any id containing -NC- adds NOT FOR RESALE unless given `{id: ..., note: ...}`. | `licence: CC-BY-NC-SA-4.0` |
+| `copyright` | text | from REUSE.toml | Copyright line for the LICENCE row when `licence:` overrides the REUSE lookup. | `copyright: © 2026 Charles Marshall` |
 | `readme` | path | "" | Markdown file to keep the drawing embedded in, between `<!-- blueprint:NAME -->` and `<!-- /blueprint -->` (NAME is the output file name). Each render rewrites the embed and a credit line linking this project. | `readme: README.md` |
 | `style` | map | {} | House-style switches: `aged` (default true), `grid` (default false), `stamp` (default true), `winks` (default true), `credit` (default true). | `style: {grid: true, winks: false}` |
 
@@ -46,6 +48,8 @@ views: [top]
 isometric: 1.6
 captions: {front: socket face, top: snap fingers up}
 notes: [Print flat edge down, no supports.]
+licence: CC-BY-NC-SA-4.0
+copyright: © 2026 Charles Marshall
 readme: README.md
 style: {grid: true, winks: false}
 ```

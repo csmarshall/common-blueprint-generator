@@ -84,7 +84,6 @@ Per-repo switches for the parts of the house style that are personality rather t
 
 | Size | Width × height (mm) | SIZE field wink |
 |---|---|---|
-| A | 279.4 × 215.9 | 8.5 × 11, THE PRINTER ONE |
 | B | 431.8 × 279.4 | 11 × 17, THE TABLOID ONE |
 | C | 558.8 × 431.8 | 17 × 22, THE PLOTTER ONE |
 
