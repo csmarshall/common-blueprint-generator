@@ -18,6 +18,13 @@ def _area(loop: np.ndarray) -> float:
     return abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) / 2
 
 
+def _point_to_segment(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    """Distance from point p to the segment a-b."""
+    ab = b - a
+    t = 0.0 if not ab.any() else float(np.clip(np.dot(p - a, ab) / np.dot(ab, ab), 0, 1))
+    return float(np.linalg.norm(p - (a + t * ab)))
+
+
 def _corner_points(view_lines: list[np.ndarray]) -> np.ndarray:
     return np.vstack(view_lines)
 
@@ -83,13 +90,23 @@ def test_step_round_trip(block_step: Path) -> None:
     assert len(v.circles) >= 1
 
 
-def test_stl_fallback_draws_outline_without_facet_comb(block_stl: Path) -> None:
-    v = project(load_shape(block_stl), (0, 0, 1), (0, 1, 0))
-    x0, y0, x1, y1 = v.bounds()
+def test_stl_fallback_draws_outline_without_facet_comb(block_stl: Path, block_step: Path) -> None:
+    """Every visible straight edge of the mesh must lie on a visible edge of the exact solid: a diagonal across a flat face fails."""
+    mesh = project(load_shape(block_stl), (0, 0, 1), (0, 1, 0))
+    exact = project(load_shape(block_step), (0, 0, 1), (0, 1, 0))
+    x0, y0, x1, y1 = mesh.bounds()
     assert (x1 - x0, y1 - y0) == pytest.approx(BLOCK[:2], abs=1e-3)
-    assert v.circles == []  # a mesh has no true circles
-    # Coplanar triangles on the front face must not each draw an edge: the outline plus the faceted hole stay well under the raw triangle count.
-    assert len(v.visible) < 200
+    assert mesh.circles == []  # a mesh has no true circles
+    exact_segments = [(a, b) for line in exact.visible for a, b in zip(line[:-1], line[1:], strict=True)]
+    hole = np.array(HOLE_CENTRE)
+    stray = []
+    for seg in mesh.straight:
+        mid = (seg[0] + seg[-1]) / 2
+        if abs(np.linalg.norm(mid - hole) - HOLE_R) < 0.1:
+            continue  # a facet of the hole's rim
+        if min(_point_to_segment(mid, a, b) for a, b in exact_segments) > 1e-3:
+            stray.append(seg.tolist())
+    assert not stray, f"{len(stray)} mesh edges cross flat faces, e.g. {stray[:2]}"
 
 
 def test_unsupported_format(tmp_path: Path) -> None:

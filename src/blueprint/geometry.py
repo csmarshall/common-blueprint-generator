@@ -16,13 +16,14 @@ from OCP.BndLib import BndLib_Add3dCurve
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
 from OCP.BRepBndLib import BRepBndLib
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Sewing
 from OCP.BRepLib import BRepLib
 from OCP.GeomAbs import GeomAbs_CurveType
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pln, gp_Pnt
 from OCP.HLRAlgo import HLRAlgo_Projector
 from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
 from OCP.IFSelect import IFSelect_ReturnStatus
+from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import STEPControl_Reader
 from OCP.StlAPI import StlAPI_Reader
 from OCP.TopAbs import TopAbs_ShapeEnum
@@ -37,6 +38,8 @@ Polyline = np.ndarray  # N x 2, view-plane millimetres
 CURVE_SAMPLES = 28  # points per projected curved edge
 SMOOTH_ANGLE_DEG = 20.0  # edges where faces meet flatter than this are facets of one smooth surface and are not drawn
 FULL_CIRCLE_RAD = 2 * math.pi - 1e-3
+MESH_SEW_TOL = 1e-4  # mm; STL vertices shared by two triangles are written identically, so this only absorbs float noise
+MESH_COPLANAR_DEG = 0.05  # triangles whose normals differ by less than this are one flat face
 
 # TopoDS's downcast is Edge_s in OCP 7.9 (cadquery) and Edge in OCP 8 (build123d); the package has to run under both.
 _as_edge = getattr(TopoDS, "Edge_s", None) or TopoDS.Edge
@@ -89,6 +92,7 @@ def load_shape(path: Path) -> TopoDS_Shape:
         shape = TopoDS_Shape()
         if not StlAPI_Reader().Read(shape, str(path)):
             raise ValueError(f"could not read STL file {path}")
+        shape = _clean_mesh(shape)
         log.warning("%s is a mesh: curved features will draw as facets", path.name)
     else:
         raise ValueError(f"unsupported model format {path.suffix!r}: use .step, .stp or .stl")
@@ -96,6 +100,23 @@ def load_shape(path: Path) -> TopoDS_Shape:
         raise ValueError(f"{path} contains no geometry")
     log.info("loaded %s", path)
     return shape
+
+
+def _clean_mesh(shape: TopoDS_Shape) -> TopoDS_Shape:
+    """Turn an STL's loose triangles into a sewn shell with coplanar triangles merged into single faces.
+
+    StlAPI_Reader makes every triangle its own face with its own edges, so nothing is shared and the projection would draw every triangle edge,
+    including the diagonals across flat faces. Sewing shares the edges (so EncodeRegularity can hide the smooth ones); merging same-domain faces
+    turns each flat face back into one face. Curved surfaces stay faceted: their facet edges meet at less than SMOOTH_ANGLE_DEG and are hidden.
+    """
+    sewing = BRepBuilderAPI_Sewing(MESH_SEW_TOL)
+    sewing.Add(shape)
+    sewing.Perform()
+    unify = ShapeUpgrade_UnifySameDomain(sewing.SewedShape(), True, True, False)
+    unify.SetLinearTolerance(MESH_SEW_TOL)
+    unify.SetAngularTolerance(math.radians(MESH_COPLANAR_DEG))
+    unify.Build()
+    return unify.Shape()
 
 
 def bounding_box(shape: TopoDS_Shape) -> tuple[Vec, Vec]:
