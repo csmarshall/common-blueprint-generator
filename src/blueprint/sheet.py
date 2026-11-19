@@ -81,42 +81,24 @@ def _date(d: date | None) -> str:
     return d.strftime("%d %b %Y").upper() if d else ""
 
 
-class Sheet:
-    """One drawing sheet with its border and furniture, ready for views."""
+class Canvas:
+    """A figure at true size in millimetres, in the house style: the paper, the drawing primitives and byte-stable output.
 
-    def __init__(self, size: str = "B", style: Style | None = None) -> None:
-        """Create the figure at true size and draw the paper and border."""
-        self.size: SheetSize = SHEET_SIZES[size]
+    Sheet adds the border and the drawing furniture; a preview (blueprint.preview) draws views straight onto a bare Canvas.
+    """
+
+    def __init__(self, width: float, height: float, style: Style | None = None, inner: tuple[float, float, float, float] | None = None) -> None:
+        """Create the figure `width` x `height` mm and lay the paper; `inner` is the drawable region (the whole canvas when None)."""
         self.style = style or Style()
-        self.w, self.h = self.size.width, self.size.height
+        self.w, self.h = width, height
         self.fig: Figure = plt.figure(figsize=(self.w / 25.4, self.h / 25.4))
         self.ax: Axes = self.fig.add_axes((0, 0, 1, 1))
         self.ax.set_xlim(0, self.w)
         self.ax.set_ylim(0, self.h)
         self.ax.set_aspect("equal")
         self.ax.axis("off")
-        sp = self.style.spacing
-        self.inner = (sp.margin + sp.border_gap, sp.margin + sp.border_gap, self.w - sp.margin - sp.border_gap, self.h - sp.margin - sp.border_gap)
+        self.inner = inner or (0.0, 0.0, self.w, self.h)
         self._paper()
-        self._border()
-
-    # ------------------------------------------------------------------ regions the furniture occupies, for layouts to avoid
-    @property
-    def title_block_box(self) -> tuple[float, float, float, float]:
-        """(x0, y0, x1, y1) of the title block plus the tolerance and projection column beside it."""
-        x1, y0 = self.inner[2], self.inner[1]
-        return x1 - TITLE_BLOCK_W - SIDE_COLUMN_W, y0, x1, y0 + TITLE_HEAD_H + TITLE_ROWS * TITLE_ROW_H
-
-    def rev_block_box(self, rows: int) -> tuple[float, float, float, float]:
-        """(x0, y0, x1, y1) of a revision block with `rows` rows, in the top-right corner."""
-        x1, y1 = self.inner[2], self.inner[3]
-        return x1 - sum(REV_COL_W), y1 - REV_ROW_H * (rows + 2), x1, y1
-
-    @property
-    def stamp_centre(self) -> tuple[float, float]:
-        """Where the stamp sits: in the open band left of the title block, its ring just clear of the border."""
-        x0, y0, _, _ = self.title_block_box
-        return x0 - STAMP_R - 8, y0 + STAMP_R + 6
 
     # ------------------------------------------------------------------ primitives
     def text(self, x: float, y: float, s: str, size: float, color: str | None = None, **kw: object) -> None:
@@ -169,7 +151,7 @@ class Sheet:
         """A view caption: bold name, with an optional explanation in brackets."""
         self.text(x, y, f"{name} ({detail})" if detail else name, self.style.type.caption, ha="center", va="top", weight="bold")
 
-    # ------------------------------------------------------------------ paper and border
+    # ------------------------------------------------------------------ paper
     def _paper(self) -> None:
         """Flat blue paper, aged with grain, blotches, two fold creases and a vignette if the toggle is on, and the grid if that one is."""
         st = self.style
@@ -197,6 +179,58 @@ class Sheet:
             for y in np.arange(math.ceil(y0 / 10) * 10, y1, 10):
                 self.line([x0, x1], [y, y], st.lines.grid, st.palette.grid, zorder=-9)
 
+    # ------------------------------------------------------------------ output
+    def save(self, stem: Path, formats: Sequence[str] = ("png", "svg"), dpi: int = PNG_DPI) -> list[Path]:
+        """Write the canvas as stem.<format> for each format and close the figure.
+
+        No randomness or file metadata dates (fixed SVG id salt, no creation date), so two renders of the same drawing on the same day, commit and
+        toolchain are byte-identical. The title block's UPDATED date and RENDERED FROM sha still change per day and commit, by design, so a re-render
+        on a new day or after any commit differs.
+        """
+        stem.parent.mkdir(parents=True, exist_ok=True)
+        written = []
+        no_dates: dict[str, dict[str, str | None]] = {"svg": {"Date": None}, "pdf": {"CreationDate": None, "ModDate": None}, "png": {}}
+        for ext in formats:
+            path = stem.with_name(f"{stem.name}.{ext}")  # not with_suffix: an output name may contain dots (part-v1.2)
+            with plt.rc_context({"svg.hashsalt": "common-blueprint-generator"}):
+                self.fig.savefig(path, dpi=dpi if ext == "png" else None, facecolor=self.style.palette.paper, metadata=no_dates.get(ext, {}))
+            log.info("wrote %s (%d KiB)", path, path.stat().st_size // 1024)
+            written.append(path)
+        plt.close(self.fig)
+        return written
+
+
+class Sheet(Canvas):
+    """One drawing sheet with its border and furniture, ready for views."""
+
+    def __init__(self, size: str = "B", style: Style | None = None) -> None:
+        """Create the figure at true size and draw the paper and border."""
+        self.size: SheetSize = SHEET_SIZES[size]
+        st = style or Style()
+        sp, w, h = st.spacing, self.size.width, self.size.height
+        inset = sp.margin + sp.border_gap
+        super().__init__(w, h, st, (inset, inset, w - inset, h - inset))
+        self._border()
+
+    # ------------------------------------------------------------------ regions the furniture occupies, for layouts to avoid
+    @property
+    def title_block_box(self) -> tuple[float, float, float, float]:
+        """(x0, y0, x1, y1) of the title block plus the tolerance and projection column beside it."""
+        x1, y0 = self.inner[2], self.inner[1]
+        return x1 - TITLE_BLOCK_W - SIDE_COLUMN_W, y0, x1, y0 + TITLE_HEAD_H + TITLE_ROWS * TITLE_ROW_H
+
+    def rev_block_box(self, rows: int) -> tuple[float, float, float, float]:
+        """(x0, y0, x1, y1) of a revision block with `rows` rows, in the top-right corner."""
+        x1, y1 = self.inner[2], self.inner[3]
+        return x1 - sum(REV_COL_W), y1 - REV_ROW_H * (rows + 2), x1, y1
+
+    @property
+    def stamp_centre(self) -> tuple[float, float]:
+        """Where the stamp sits: in the open band left of the title block, its ring just clear of the border."""
+        x0, y0, _, _ = self.title_block_box
+        return x0 - STAMP_R - 8, y0 + STAMP_R + 6
+
+    # ------------------------------------------------------------------ border
     def _border(self) -> None:
         """Double border, with centring marks at the middle of each edge (the top one says which way is up when winks are on)."""
         st, sp = self.style, self.style.spacing
@@ -395,36 +429,16 @@ class Sheet:
         ):
             self.text(*at(dy), s, size, pal.dim, ha="center", va="center", rotation=tilt, weight=weight, alpha=0.9)
 
-    # ------------------------------------------------------------------ output
-    def save(self, stem: Path, formats: Sequence[str] = ("png", "svg"), dpi: int = PNG_DPI) -> list[Path]:
-        """Write the sheet as stem.<format> for each format and close the figure.
-
-        No randomness or file metadata dates (fixed SVG id salt, no creation date), so two renders of the same drawing on the same day, commit and
-        toolchain are byte-identical. The title block's UPDATED date and RENDERED FROM sha still change per day and commit, by design, so a re-render
-        on a new day or after any commit differs.
-        """
-        stem.parent.mkdir(parents=True, exist_ok=True)
-        written = []
-        no_dates: dict[str, dict[str, str | None]] = {"svg": {"Date": None}, "pdf": {"CreationDate": None, "ModDate": None}, "png": {}}
-        for ext in formats:
-            path = stem.with_name(f"{stem.name}.{ext}")  # not with_suffix: an output name may contain dots (part-v1.2)
-            with plt.rc_context({"svg.hashsalt": "common-blueprint-generator"}):
-                self.fig.savefig(path, dpi=dpi if ext == "png" else None, facecolor=self.style.palette.paper, metadata=no_dates.get(ext, {}))
-            log.info("wrote %s (%d KiB)", path, path.stat().st_size // 1024)
-            written.append(path)
-        plt.close(self.fig)
-        return written
-
 
 class View:
-    """Projected geometry placed on a sheet: model millimetres times `scale`, model origin at `origin` in sheet millimetres."""
+    """Projected geometry placed on a sheet (or any Canvas): model millimetres times `scale`, model origin at `origin` in sheet millimetres."""
 
-    def __init__(self, sheet: Sheet, projection: Projection, origin: tuple[float, float], scale: float) -> None:
+    def __init__(self, sheet: Canvas, projection: Projection, origin: tuple[float, float], scale: float) -> None:
         """Place `projection` with model (0, 0) at sheet `origin`."""
         self.sheet, self.proj, self.origin, self.scale = sheet, projection, np.array(origin, float), scale
 
     @classmethod
-    def at_corner(cls, sheet: Sheet, projection: Projection, corner: tuple[float, float], scale: float) -> View:
+    def at_corner(cls, sheet: Canvas, projection: Projection, corner: tuple[float, float], scale: float) -> View:
         """Place `projection` with the lower-left corner of its visible outline at sheet `corner`."""
         x0, y0, _, _ = projection.bounds()
         return cls(sheet, projection, (corner[0] - x0 * scale, corner[1] - y0 * scale), scale)

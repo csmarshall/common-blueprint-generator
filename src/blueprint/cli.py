@@ -16,7 +16,8 @@ from pathlib import Path
 from .config import DrawingConfig, load
 from .geometry import load_shape
 from .layout import auto_sheet
-from .readme import embed, update
+from .preview import preview
+from .readme import PREVIEW, SHEET, embed, update
 from .reuse_lookup import FileLicence, licence_for
 from .revisions import GitDates, git_dates, revisions
 from .sheet import Sheet, TitleInfo
@@ -59,21 +60,39 @@ def render(cfg: DrawingConfig, dates: GitDates, rendered: date | None = None) ->
     if cfg.readme:
         image = next((p for p in written if p.suffix == ".svg"), written[0])  # the scalable copy when there is one
         update(cfg.readme, cfg.output.name, embed(cfg.readme, image, cfg.title, cfg.source or cfg.model))
+    if cfg.preview:
+        p = cfg.preview
+        drawn = preview(
+            list(p.parts),
+            p.output,
+            front=cfg.front,
+            up=cfg.up,
+            view=p.view,
+            width=p.width,
+            style=sheet.style,
+            readme=cfg.readme,
+            title=cfg.title,
+            source=cfg.source or cfg.model,
+        )
+        written.append(drawn.path)
     return written
 
 
 def _shared_marker(paths: list[Path]) -> tuple[Path, Path, str, Path] | None:
-    """Two configs whose drawings would share one README marker (same output name, same README), which would overwrite each other's embed."""
-    seen: dict[tuple[Path, str], Path] = {}
+    """Two configs whose drawings (or previews) would share one README marker, which would overwrite each other's embed."""
+    seen: dict[tuple[Path, str, str], Path] = {}
     for path in paths:
         try:
             cfg = load(path)
         except (OSError, ValueError):
             continue  # reported when it is rendered
-        if cfg.readme:
-            key = (cfg.readme, cfg.output.name)
+        if not cfg.readme:
+            continue
+        names = [(SHEET, cfg.output.name)] + ([(PREVIEW, cfg.preview.output.name)] if cfg.preview else [])
+        for kind, name in names:
+            key = (cfg.readme, kind, name)
             if key in seen:
-                return seen[key], path, cfg.output.name, cfg.readme
+                return seen[key], path, f"{kind}:{name}", cfg.readme
             seen[key] = path
     return None
 

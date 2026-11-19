@@ -26,6 +26,7 @@ One `blueprint.yml` per drawing. Paths are relative to the file. Unknown keys ar
 | `licence` | SPDX id or map | none | Override for the LICENCE row. Normally omitted: the licence and copyright are read from the repo's REUSE.toml for the drawing's own output file, and a render with no REUSE.toml or no matching annotation fails. Set this (an SPDX id) to skip that lookup. Known ids (CC-BY-4.0, CC-BY-SA-4.0, CC-BY-ND-4.0, CC-BY-NC-4.0, CC-BY-NC-SA-4.0, CC-BY-NC-ND-4.0, CC0-1.0, MIT, Apache-2.0, BSD-3-Clause, GPL-3.0-or-later, CERN-OHL-S-2.0) get their label, CC icons or a badge, and deed link; others print as given. Any id containing -NC- adds NOT FOR RESALE unless given `{id: ..., note: ...}`. | `licence: CC-BY-NC-SA-4.0` |
 | `copyright` | text | from REUSE.toml | Copyright line for the LICENCE row when `licence:` overrides the REUSE lookup. | `copyright: © 2026 Charles Marshall` |
 | `readme` | path | "" | Markdown file to keep the drawing embedded in, between `<!-- blueprint:NAME -->` and `<!-- /blueprint -->` (NAME is the output file name). Each render rewrites the embed and a credit line linking this project. | `readme: README.md` |
+| `preview` | true or map | none | Also draw a sheet-free preview for a README header: the part with no border, title block or dimensions, as SVG. `true` draws this model; a map sets `view` (default isometric), `width` (most mm across, default 200; parts stand at most 90 mm tall), `output` (default OUTPUT-preview) and `parts`, a list of `{model, caption}` drawn side by side at one scale (default: this model, uncaptioned). With `readme`, it is kept embedded between `<!-- blueprint-preview:NAME -->` and `<!-- /blueprint-preview -->` (NAME is the preview's output file name). | `preview: {parts: [{model: build/inline.step, caption: IN-LINE}, {model: build/end.step, caption: END}]}` |
 | `style` | map | {} | House-style switches: `aged` (default true), `grid` (default false), `stamp` (default true), `winks` (default true), `credit` (default true). | `style: {grid: true, winks: false}` |
 
 ## A complete example
@@ -51,5 +52,6 @@ notes: [Print flat edge down, no supports.]
 licence: CC-BY-NC-SA-4.0
 copyright: © 2026 Charles Marshall
 readme: README.md
+preview: {parts: [{model: build/inline.step, caption: IN-LINE}, {model: build/end.step, caption: END}]}
 style: {grid: true, winks: false}
 ```
