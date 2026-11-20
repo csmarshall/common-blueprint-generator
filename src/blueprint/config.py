@@ -6,6 +6,7 @@ cannot describe a key the loader does not accept or miss one it does.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -251,13 +252,21 @@ def _preview(path: Path, value: Any, model: Path, output: Path) -> PreviewConfig
     if view not in ALL_VIEWS:
         raise ValueError(f"{path}: preview view must be one of {[v.lower() for v in ALL_VIEWS]}, not {view.lower()!r}")
     width = value.get("width", PREVIEW_WIDTH)
-    if not isinstance(width, int | float) or isinstance(width, bool) or width <= 0:
+    if not isinstance(width, int | float) or isinstance(width, bool) or not math.isfinite(width) or width <= 0:
         raise ValueError(f"{path}: preview width is a positive number of mm, not {width!r}")
     base = path.parent
     parts: list[tuple[Path, str]] = []
     for entry in _as_list(value.get("parts") or [{"model": None}]):
         if not isinstance(entry, dict) or set(entry) - {"model", "caption"}:
             raise ValueError(f"{path}: each preview part is a map of model and caption, not {entry!r}")
-        parts.append(((base / entry["model"]).resolve() if entry.get("model") else model, str(entry.get("caption") or "")))
-    out = (base / value["output"]).resolve() if value.get("output") else default_output
+        part_model = entry.get("model")
+        if part_model is not None and not isinstance(part_model, str):
+            raise ValueError(f"{path}: a preview part's model is a path, not {part_model!r}")
+        parts.append(((base / part_model).resolve() if part_model else model, str(entry.get("caption") or "")))
+    out_raw = value.get("output")
+    if out_raw is not None and not isinstance(out_raw, str):
+        raise ValueError(f"{path}: preview output is a path, not {out_raw!r}")
+    out = (base / out_raw).resolve() if out_raw else default_output
+    if out == output:
+        raise ValueError(f"{path}: preview output {out_raw!r} is the sheet's own output: the preview would overwrite the sheet")
     return PreviewConfig(out, view, float(width), tuple(parts))

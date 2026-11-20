@@ -45,13 +45,25 @@ def embed(readme: Path, image: Path, title: str, source: str | Path, what: str =
     return f"[![{title}]({rel})]({rel})\n\n<sub>{credit}</sub>"
 
 
-def update(readme: Path, name: str, content: str, kind: str = SHEET) -> bool:
-    """Replace the text between this drawing's markers in `readme`; True if the file changed. Raises ValueError if the markers are missing."""
+def _pattern(readme: Path, name: str, kind: str) -> tuple[re.Pattern[str], str, str]:
+    """The regex spanning this drawing's markers and the README text; ValueError naming the lines to add if the markers are missing."""
     start, end = markers(name, kind)
     text = readme.read_text()
     pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.DOTALL)
     if not pattern.search(text):
         raise ValueError(f"{readme}: add the line '{start}' and, below it, '{end}' where the drawing should appear")
+    return pattern, start, end
+
+
+def require(readme: Path, name: str, kind: str = SHEET) -> None:
+    """Raise ValueError unless `readme` has this drawing's markers: checked before drawing, so a missing marker fails before anything is written."""
+    _pattern(readme, name, kind)
+
+
+def update(readme: Path, name: str, content: str, kind: str = SHEET) -> bool:
+    """Replace the text between this drawing's markers in `readme`; True if the file changed. Raises ValueError if the markers are missing."""
+    pattern, start, end = _pattern(readme, name, kind)
+    text = readme.read_text()
     new = pattern.sub(lambda _: f"{start}\n{content}\n{end}", text, count=1)
     if new == text:
         return False

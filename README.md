@@ -142,7 +142,7 @@ preview([(inline, "IN-LINE"), (staggered, "STAGGERED"), (end, "END")], Path("doc
         front="-Y", up="+Z", readme=Path("README.md"), title="BRACKETS", source="brackets/parts.py")
 ```
 
-The parts fill `width` (200 mm by default) unless they would stand taller than 90 mm; then the canvas narrows instead, so a tall part still makes a header strip.
+The parts fill `width` unless they would stand taller than the height cap (both defaults are in the [reference](docs/config-reference.md)); then the canvas narrows instead, so a tall part still makes a header strip. The preview's SVG must be covered by `REUSE.toml` like the sheet, unless `licence:` overrides the lookup.
 
 ### Dependencies
 

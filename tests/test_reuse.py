@@ -105,3 +105,15 @@ def test_unmatched_path_fails_naming_the_path(tmp_path: Path, block_step: Path) 
     with pytest.raises(LicenceLookupError, match=r"part/drawing\.svg: no REUSE\.toml annotation"):
         licence_for(repo / "part" / "drawing.svg")
     assert main(["render", str(_cfg(repo))]) == 1
+
+
+def test_preview_path_must_be_licensed_too(tmp_path: Path, block_step: Path) -> None:
+    only_sheet = SPLIT.replace('path = ["**/*.svg", "**/*.step", "models/**"]', 'path = ["part/drawing.svg", "**/*.step"]').replace(
+        'path = "**"\nSPDX-FileCopyrightText = "2026 Charles Marshall"\nSPDX-License-Identifier = "MIT"',
+        'path = "**/*.py"\nSPDX-FileCopyrightText = "2026 Charles Marshall"\nSPDX-License-Identifier = "MIT"',
+    )
+    repo = _repo(tmp_path, only_sheet, block_step)
+    assert main(["render", str(_cfg(repo))]) == 0, "the sheet alone is covered"
+    (repo / "part" / "drawing.svg").unlink()
+    assert main(["render", str(_cfg(repo, "preview: true\n"))]) == 1
+    assert not (repo / "part" / "drawing.svg").exists(), "an unlicensed preview fails before anything is written"

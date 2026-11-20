@@ -125,6 +125,10 @@ def test_config_preview_true_and_map(tmp_path: Path, block_step: Path) -> None:
         ("preview: {view: sideways}\n", "preview view"),
         ("preview: {width: 0}\n", "positive number"),
         ("preview: {parts: [block.step]}\n", "map of model and caption"),
+        ("preview: {width: .nan}\n", "positive number"),
+        ("preview: {output: [a]}\n", "output is a path"),
+        ("preview: {parts: [{model: 5}]}\n", "model is a path"),
+        ("preview: {output: out/sheet}\n", "overwrite the sheet"),
     ],
 )
 def test_config_preview_errors(tmp_path: Path, block_step: Path, extra: str, message: str) -> None:
@@ -144,8 +148,22 @@ def test_cli_renders_preview_with_the_sheet(tmp_path: Path, block_step: Path) ->
 
 
 def test_cli_refuses_two_configs_sharing_a_preview_marker(tmp_path: Path, block_step: Path) -> None:
-    (tmp_path / "README.md").write_text("")
+    # Every marker either config needs is present, so the duplicate check is the only thing that can fail this run.
+    names = [("blueprint", "sheet"), ("blueprint", "other"), ("blueprint-preview", "hero")]
+    (tmp_path / "README.md").write_text("".join(f"{a}\n{b}\n" for a, b in (markers(n, k) for k, n in names)))
     one = _config(tmp_path, block_step, "readme: README.md\npreview: {output: hero}\n")
     two = tmp_path / "two.yml"
     two.write_text(one.read_text().replace("out/sheet", "out/other"))
+    assert main(["render", str(one)]) == 0 and main(["render", str(two)]) == 0, "each renders alone"
+    for svg in tmp_path.rglob("*.svg"):
+        svg.unlink()
     assert main(["render", str(one), str(two)]) == 1
+    assert not list(tmp_path.rglob("*.svg")), "refused before anything is drawn"
+
+
+def test_cli_checks_preview_marker_before_writing(tmp_path: Path, block_step: Path) -> None:
+    sheet_start, sheet_end = markers("sheet")
+    (tmp_path / "README.md").write_text(f"{sheet_start}\n{sheet_end}\n")  # the preview marker is missing
+    cfg = _config(tmp_path, block_step, "readme: README.md\npreview: true\n")
+    assert main(["render", str(cfg)]) == 1
+    assert not list(tmp_path.rglob("*.svg")), "a missing marker fails before the sheet is written"
