@@ -11,6 +11,7 @@ company: Example Works
 licence: MIT
 readme: ../README.md
 formats: [svg, png]
+preview: true  # examples/block-preview.svg, embedded under 'README header previews'
 captions:
   front: notch top right
 notes:

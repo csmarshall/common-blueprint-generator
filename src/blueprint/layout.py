@@ -66,7 +66,7 @@ class AutoLayout:
     views: dict[str, View]
 
 
-def _size(p: Projection) -> tuple[float, float]:
+def view_size(p: Projection) -> tuple[float, float]:
     """Width and height of a view's visible outline, never zero (an edge-on face would otherwise divide by zero when scaling)."""
     x0, y0, x1, y1 = p.bounds()
     return max(x1 - x0, MIN_EXTENT), max(y1 - y0, MIN_EXTENT)
@@ -117,7 +117,7 @@ def auto_sheet(
 
 def _single(sheet: Sheet, name: str, projection: Projection, area: tuple[float, float, float, float], captions: dict[str, str]) -> AutoLayout:
     """One view, centred in `area` (already clear of every annotation and the revision block)."""
-    pw, ph = _size(projection)
+    pw, ph = view_size(projection)
     aw, ah = area[2] - area[0], area[3] - area[1]
     if name == "ISOMETRIC":
         s = min(aw / pw, ah / ph) * ISO_FILL
@@ -158,7 +158,7 @@ def _grid(
 ) -> AutoLayout:
     """Orthographic views on the third-angle grid, and the isometric (if chosen) in the space to their right."""
     gap = sheet.style.spacing.view_gap
-    size = {name: _size(p) for name, p in proj.items()}
+    size = {name: view_size(p) for name, p in proj.items()}
     ortho = [n for n in proj if n != "ISOMETRIC"]
     has_iso = "ISOMETRIC" in proj
     cols = sorted({CELLS[n][0] for n in ortho})

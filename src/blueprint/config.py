@@ -6,6 +6,7 @@ cannot describe a key the loader does not accept or miss one it does.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ import yaml
 
 from .layout import ALL_VIEWS, DEFAULT_ISO_SIZE, DEFAULT_VIEWS
 from .licences import LICENCES, NONCOMMERCIAL_NOTE, Licence, lookup
+from .preview import PREVIEW_HEIGHT, PREVIEW_VIEW, PREVIEW_WIDTH
 from .style import SHEET_SIZES, Toggles
 
 FORMATS = ("png", "svg", "pdf")
@@ -84,6 +86,17 @@ KEYS: tuple[Key, ...] = (
         "README.md",
     ),
     Key(
+        "preview",
+        "true or map",
+        "none",
+        "Also draw a sheet-free preview for a README header: the part with no border, title block or dimensions, as SVG. `true` draws this model; "
+        f"a map sets `view` (default {PREVIEW_VIEW.lower()}), `width` (most mm across, default {PREVIEW_WIDTH:g}; parts stand at most "
+        f"{PREVIEW_HEIGHT:g} mm tall), `output` (default OUTPUT-preview) and "
+        "`parts`, a list of `{model, caption}` drawn side by side at one scale (default: this model, uncaptioned). With `readme`, it is kept "
+        "embedded between `<!-- blueprint-preview:NAME -->` and `<!-- /blueprint-preview -->` (NAME is the preview's output file name).",
+        "{parts: [{model: build/inline.step, caption: IN-LINE}, {model: build/end.step, caption: END}]}",
+    ),
+    Key(
         "style",
         "map",
         "{}",
@@ -93,6 +106,19 @@ KEYS: tuple[Key, ...] = (
 )
 KNOWN = {k.name for k in KEYS}
 REQUIRED = tuple(k.name for k in KEYS if k.default == "required")
+
+
+PREVIEW_KEYS = ("view", "width", "output", "parts")
+
+
+@dataclass(frozen=True)
+class PreviewConfig:
+    """The `preview:` block: what to draw and where. Field meanings are in KEYS."""
+
+    output: Path  # without extension
+    view: str = PREVIEW_VIEW
+    width: float = PREVIEW_WIDTH
+    parts: tuple[tuple[Path, str], ...] = ()  # (model, caption), left to right
 
 
 @dataclass
@@ -122,6 +148,7 @@ class DrawingConfig:
     captions: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     toggles: Toggles = Toggles()
+    preview: PreviewConfig | None = None
 
 
 def load(path: Path) -> DrawingConfig:
@@ -166,10 +193,11 @@ def load(path: Path) -> DrawingConfig:
     if not_bool := [k for k, v in style.items() if not isinstance(v, bool)]:
         raise ValueError(f"{path}: style switches take true or false, unquoted; check {not_bool}")
     licence, licence_note = _licence(path, raw.get("licence"))
+    model, output = (base / raw["model"]).resolve(), (base / raw["output"]).resolve()
     return DrawingConfig(
         path=path,
-        model=(base / raw["model"]).resolve(),
-        output=(base / raw["output"]).resolve(),
+        model=model,
+        output=output,
         title=str(raw["title"]),
         drawing_number=str(raw.get("drawing_number", "")),
         for_=str(raw.get("for", "")),
@@ -190,6 +218,7 @@ def load(path: Path) -> DrawingConfig:
         captions={str(k).upper(): str(v) for k, v in (raw.get("captions") or {}).items()},
         notes=[str(n) for n in raw.get("notes") or []],
         toggles=Toggles(**style),
+        preview=_preview(path, raw.get("preview"), model, output),
     )
 
 
@@ -206,3 +235,38 @@ def _licence(path: Path, value: Any) -> tuple[Licence | None, str | None]:
     if not spdx:
         raise ValueError(f"{path}: licence: needs an SPDX id, e.g. licence: CC-BY-NC-SA-4.0 or licence: {{id: MIT, note: ...}}")
     return lookup(str(spdx)), None if note is None else str(note)
+
+
+def _preview(path: Path, value: Any, model: Path, output: Path) -> PreviewConfig | None:
+    """`preview: true` or `preview: {view, width, output, parts}` as a PreviewConfig; None when absent or false."""
+    if value is None or value is False:
+        return None
+    default_output = output.with_name(f"{output.name}-preview")
+    if value is True:
+        return PreviewConfig(default_output, parts=((model, ""),))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: preview: takes true, or a map of {list(PREVIEW_KEYS)}, not {value!r}")
+    if unknown := set(value) - set(PREVIEW_KEYS):
+        raise ValueError(f"{path}: unknown preview keys {sorted(unknown)}; expected some of {list(PREVIEW_KEYS)}")
+    view = str(value.get("view", PREVIEW_VIEW)).upper()
+    if view not in ALL_VIEWS:
+        raise ValueError(f"{path}: preview view must be one of {[v.lower() for v in ALL_VIEWS]}, not {view.lower()!r}")
+    width = value.get("width", PREVIEW_WIDTH)
+    if not isinstance(width, int | float) or isinstance(width, bool) or not math.isfinite(width) or width <= 0:
+        raise ValueError(f"{path}: preview width is a positive number of mm, not {width!r}")
+    base = path.parent
+    parts: list[tuple[Path, str]] = []
+    for entry in _as_list(value.get("parts") or [{"model": None}]):
+        if not isinstance(entry, dict) or set(entry) - {"model", "caption"}:
+            raise ValueError(f"{path}: each preview part is a map of model and caption, not {entry!r}")
+        part_model = entry.get("model")
+        if part_model is not None and not isinstance(part_model, str):
+            raise ValueError(f"{path}: a preview part's model is a path, not {part_model!r}")
+        parts.append(((base / part_model).resolve() if part_model else model, str(entry.get("caption") or "")))
+    out_raw = value.get("output")
+    if out_raw is not None and not isinstance(out_raw, str):
+        raise ValueError(f"{path}: preview output is a path, not {out_raw!r}")
+    out = (base / out_raw).resolve() if out_raw else default_output
+    if out == output:
+        raise ValueError(f"{path}: preview output {out_raw!r} is the sheet's own output: the preview would overwrite the sheet")
+    return PreviewConfig(out, view, float(width), tuple(parts))

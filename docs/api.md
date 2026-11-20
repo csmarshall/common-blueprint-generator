@@ -8,6 +8,8 @@ Generated from the docstrings. Config-only repos never need this page: it is for
 
 ::: blueprint.layout
 
+::: blueprint.preview
+
 ::: blueprint.revisions
 
 ::: blueprint.readme

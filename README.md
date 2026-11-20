@@ -118,6 +118,32 @@ sheet.save(Path("blueprint"))
 
 In the workflow, pass `render-command` instead of `configs`. `$BLUEPRINT_PACKAGE` holds the pip requirement for the generator at the chosen ref.
 
+### README header previews
+
+A sheet is the reference; a README usually wants a picture of the part first. `preview` draws one from the same model in the same run, so it can't go stale: the part in the house style, with no border, title block, dimensions or hidden lines, as SVG. Several parts go side by side at one scale, with captions. Add `preview: true` to `blueprint.yml` (or a map: `view`, `width`, `output`, `parts`; see the [reference](docs/config-reference.md)) and mark the spot, NAME being the preview's output file name (`block-preview` here):
+
+```markdown
+<!-- blueprint-preview:NAME -->
+<!-- /blueprint-preview -->
+```
+
+<!-- blueprint-preview:block-preview -->
+[![TEST BLOCK](examples/block-preview.svg)](examples/block-preview.svg)
+
+<sub>Preview generated from `tests/conftest.py (notched_block)` by [common-blueprint-generator](https://github.com/csmarshall/common-blueprint-generator) on every change to the model · [Buy me a coffee](https://buymeacoffee.com/cs_marshall)</sub>
+<!-- /blueprint-preview -->
+
+From Python, parts can be files or objects built in memory (an OCP shape, a build123d part, a cadquery shape or workplane), so a repo that builds its parts from parameters doesn't write a file just to read it back:
+
+```python
+from blueprint import preview
+
+preview([(inline, "IN-LINE"), (staggered, "STAGGERED"), (end, "END")], Path("docs/preview"),
+        front="-Y", up="+Z", readme=Path("README.md"), title="BRACKETS", source="brackets/parts.py")
+```
+
+The parts fill `width` unless they would stand taller than the height cap (both defaults are in the [reference](docs/config-reference.md)); then the canvas narrows instead, so a tall part still makes a header strip. The preview's SVG must be covered by `REUSE.toml` like the sheet, unless `licence:` overrides the lookup.
+
 ### Dependencies
 
 Only OCP, matplotlib, numpy, scipy and PyYAML. The package depends on `cadquery-ocp-proxy`, so it uses whichever OCP the caller already has: cadquery 2.8 pins OCP 7.9, build123d 0.13 uses OCP 8, and CI tests both. Install the `ocp` extra when nothing else provides it.
