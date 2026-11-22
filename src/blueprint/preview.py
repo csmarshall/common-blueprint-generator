@@ -18,9 +18,9 @@ from typing import Any
 from OCP.TopoDS import TopoDS_Shape
 
 from .geometry import load_shape, project
-from .layout import ALL_VIEWS, TEXT_HEIGHT_EM, view_directions, view_size
+from .layout import ALL_VIEWS, view_directions, view_size
 from .readme import PREVIEW, embed, update
-from .sheet import Canvas, View
+from .sheet import TEXT_HEIGHT_EM, Canvas, View
 from .style import PT_PER_MM, Style
 
 log = logging.getLogger(__name__)

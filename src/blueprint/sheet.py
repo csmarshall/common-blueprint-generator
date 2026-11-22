@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import matplotlib
 
@@ -21,9 +22,12 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib import colors as mcolors  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
+from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.font_manager import FontProperties  # noqa: E402
 from matplotlib.patches import Circle, PathPatch, Polygon, Rectangle  # noqa: E402
 from matplotlib.path import Path as MplPath  # noqa: E402
+from matplotlib.textpath import TextPath  # noqa: E402
 from matplotlib.transforms import Affine2D  # noqa: E402
 from scipy.ndimage import gaussian_filter  # noqa: E402
 
@@ -43,6 +47,12 @@ SIDE_COLUMN_W = 92.0  # tolerance block and projection symbol, left of the title
 REV_COL_W = (12.0, 76.0, 26.0)  # REV, DESCRIPTION, DATE
 REV_ROW_H = 6.0
 STAMP_R = 19.0
+CELL_PAD = 1.5  # mm from a title-block cell's left and right edges to its text
+CELL_HEAD_TOP = 1.2  # mm from a cell's top to its label
+CELL_BODY_BOTTOM = 1.3  # mm from a cell's bottom to its text baseline
+FIT_MIN_FRACTION = 0.25  # fitting gives up below this fraction of the label size (unreadable anyway) rather than shrink forever
+FIT_STEP = 0.97  # each step down when shrinking text to fit a cell; smaller steps fit tighter but measure more often
+TEXT_HEIGHT_EM = 1.2  # a line of lettering is this many font sizes tall, ascender to descender
 PNG_DPI = 150  # 2550 px across an ANSI B sheet; the SVG is the scalable copy, so the PNG only needs to be a sharp preview
 
 
@@ -150,6 +160,72 @@ class Canvas:
     def caption(self, x: float, y: float, name: str, detail: str = "") -> None:
         """A view caption: bold name, with an optional explanation in brackets."""
         self.text(x, y, f"{name} ({detail})" if detail else name, self.style.type.caption, ha="center", va="top", weight="bold")
+
+    # ------------------------------------------------------------------ measuring lettering
+    def text_width(self, s: str, size: float) -> float:
+        """Width in mm of `s` set in the house face at `size` points, as wide as either output sets it.
+
+        The SVG draws the glyph outlines, measured here exactly. The PNG is rasterised by Agg, which rounds glyph advances to whole pixels at
+        PNG_DPI, so at some sizes it sets the same text a few percent wider; text fitted to the larger of the two fits both.
+        """
+        if not s:
+            return 0.0
+        # Spaces have an advance but no outline, so text that is only whitespace is measured by the raster alone.
+        prop = FontProperties(family=self.style.type.family)
+        outline = float(TextPath((0, 0), s, size=size, prop=prop).get_extents().x1) / PT_PER_MM if s.strip() else 0.0
+        dpi = self.fig.dpi
+        self.fig.set_dpi(PNG_DPI)
+        probe = self.ax.text(0, 0, s, fontsize=size, fontfamily=self.style.type.family)
+        try:
+            renderer = cast(FigureCanvasAgg, self.fig.canvas).get_renderer()  # type: ignore[no-untyped-call]
+            box = probe.get_window_extent(renderer).transformed(self.ax.transData.inverted())
+        finally:
+            probe.remove()
+            self.fig.set_dpi(dpi)
+        return max(outline, float(box.x1 - box.x0))
+
+    def text_height(self, size: float) -> float:
+        """Height in mm of one line of lettering at `size` points, ascender to descender."""
+        return size / PT_PER_MM * TEXT_HEIGHT_EM
+
+    def fit_text(self, s: str, width: float, height: float, size: float, floor: float) -> tuple[list[str], float]:
+        """Lines and point size that set all of `s` inside width x height mm. Nothing is ever cut.
+
+        `size` if it fits on one line; else smaller, down to `floor`, still on one line; else wrapped at word breaks at `floor`; else wrapped and
+        shrunk further, step by step, until every word is shown. Going below `floor` logs a warning, since the text gets hard to read.
+        """
+        if width <= 0 or height <= 0:
+            raise ValueError(f"cannot fit {s!r} into {width:g} x {height:g} mm: the space must have a positive width and height")
+        if self.text_width(s, size) <= width:
+            return [s], size
+        floor = min(floor, size)  # never set text larger than asked
+        shrunk = size * width / self.text_width(s, size)
+        while shrunk >= floor and self.text_width(s, shrunk) > width:
+            shrunk *= FIT_STEP  # the raster width is not proportional to the size, so step down until both outputs fit
+        if shrunk >= floor:
+            return [s], shrunk
+        size, smallest = floor, floor * FIT_MIN_FRACTION
+        while True:
+            lines = self._wrap(s, width, size)
+            if len(lines) * self.text_height(size) <= height and all(self.text_width(line, size) <= width for line in lines):
+                break
+            if size * FIT_STEP < smallest:
+                log.warning("%r does not fit a %.0f x %.0f mm space even at %.1f pt: shown in full, overflowing", s, width, height, size)
+                return lines, size
+            size *= FIT_STEP
+        if size < floor:
+            log.warning("%r needs %.1f pt (below the %.1f pt label size) to fit a %.0f x %.0f mm cell: consider shortening it", s, size, floor, width, height)
+        return lines, size
+
+    def _wrap(self, s: str, width: float, size: float) -> list[str]:
+        """Greedy word wrap of `s` to `width` mm at `size` points (a single word wider than `width` stays on its own line)."""
+        lines: list[str] = []
+        for word in s.split():
+            if lines and self.text_width(f"{lines[-1]} {word}", size) <= width:
+                lines[-1] += f" {word}"
+            else:
+                lines.append(word)
+        return lines or [""]
 
     # ------------------------------------------------------------------ paper
     def _paper(self) -> None:
@@ -261,11 +337,19 @@ class Sheet(Canvas):
 
         def cell(x: float, y: float, w: float, head: str, body: str, size: float = ty.body) -> None:
             self.ax.add_patch(Rectangle((x, y), w, TITLE_ROW_H, fc="none", ec=pal.ink, lw=ln.table))
-            self.text(x + 1.5, y + TITLE_ROW_H - 1.2, head, ty.label, pal.dim, va="top")
-            self.text(x + 1.5, y + 1.3, body, size, va="bottom")
+            self.text(x + CELL_PAD, y + TITLE_ROW_H - CELL_HEAD_TOP, head, ty.label, pal.dim, va="top")
+            # Below the label, the body may use the cell's height less the label line and the paddings.
+            room_h = TITLE_ROW_H - CELL_HEAD_TOP - self.text_height(ty.label) - CELL_BODY_BOTTOM
+            lines, fitted = self.fit_text(body, w - 2 * CELL_PAD, room_h, size, min(size, ty.label))
+            if len(lines) == 1:  # set exactly as before fitting existed, so sheets whose values fit are byte-identical
+                self.text(x + CELL_PAD, y + CELL_BODY_BOTTOM, lines[0], fitted, va="bottom")
+            else:
+                self.text(x + CELL_PAD, y + CELL_BODY_BOTTOM, "\n".join(lines), fitted, va="bottom", linespacing=TEXT_HEIGHT_EM)
 
         third = TITLE_BLOCK_W / 3
-        scale_text = scale_label(scale) + "".join(f" (DETAIL {scale_label(s)})" for s in detail_scales)
+        scale_text = scale_label(scale)
+        if detail_scales:
+            scale_text += f" · DETAIL{'S' if len(detail_scales) > 1 else ''} " + ", ".join(scale_label(s) for s in detail_scales)
         rows = [
             [("STARTED", _date(info.started)), ("UPDATED", _date(info.updated or date.today())), ("SHEET", "1 OF 1")],
             [("DRAWN BY", info.drawn_by), ("DWG NO.", info.drawing_number), ("SIZE", self.size.name + (f" ({self.size.wink})" if st.toggles.winks else ""))],
