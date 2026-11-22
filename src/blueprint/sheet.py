@@ -50,6 +50,7 @@ STAMP_R = 19.0
 CELL_PAD = 1.5  # mm from a title-block cell's left and right edges to its text
 CELL_HEAD_TOP = 1.2  # mm from a cell's top to its label
 CELL_BODY_BOTTOM = 1.3  # mm from a cell's bottom to its text baseline
+FIT_MIN_FRACTION = 0.25  # fitting gives up below this fraction of the label size (unreadable anyway) rather than shrink forever
 FIT_STEP = 0.97  # each step down when shrinking text to fit a cell; smaller steps fit tighter but measure more often
 TEXT_HEIGHT_EM = 1.2  # a line of lettering is this many font sizes tall, ascender to descender
 PNG_DPI = 150  # 2550 px across an ANSI B sheet; the SVG is the scalable copy, so the PNG only needs to be a sharp preview
@@ -169,15 +170,17 @@ class Canvas:
         """
         if not s:
             return 0.0
-        outline = float(TextPath((0, 0), s, size=size, prop=FontProperties(family=self.style.type.family)).get_extents().x1) / PT_PER_MM
+        # Spaces have an advance but no outline, so text that is only whitespace is measured by the raster alone.
+        prop = FontProperties(family=self.style.type.family)
+        outline = float(TextPath((0, 0), s, size=size, prop=prop).get_extents().x1) / PT_PER_MM if s.strip() else 0.0
         dpi = self.fig.dpi
         self.fig.set_dpi(PNG_DPI)
+        probe = self.ax.text(0, 0, s, fontsize=size, fontfamily=self.style.type.family)
         try:
-            probe = self.ax.text(0, 0, s, fontsize=size, fontfamily=self.style.type.family)
             renderer = cast(FigureCanvasAgg, self.fig.canvas).get_renderer()  # type: ignore[no-untyped-call]
             box = probe.get_window_extent(renderer).transformed(self.ax.transData.inverted())
-            probe.remove()
         finally:
+            probe.remove()
             self.fig.set_dpi(dpi)
         return max(outline, float(box.x1 - box.x0))
 
@@ -191,18 +194,24 @@ class Canvas:
         `size` if it fits on one line; else smaller, down to `floor`, still on one line; else wrapped at word breaks at `floor`; else wrapped and
         shrunk further, step by step, until every word is shown. Going below `floor` logs a warning, since the text gets hard to read.
         """
+        if width <= 0 or height <= 0:
+            raise ValueError(f"cannot fit {s!r} into {width:g} x {height:g} mm: the space must have a positive width and height")
         if self.text_width(s, size) <= width:
             return [s], size
+        floor = min(floor, size)  # never set text larger than asked
         shrunk = size * width / self.text_width(s, size)
         while shrunk >= floor and self.text_width(s, shrunk) > width:
             shrunk *= FIT_STEP  # the raster width is not proportional to the size, so step down until both outputs fit
         if shrunk >= floor:
             return [s], shrunk
-        size = floor
+        size, smallest = floor, floor * FIT_MIN_FRACTION
         while True:
             lines = self._wrap(s, width, size)
             if len(lines) * self.text_height(size) <= height and all(self.text_width(line, size) <= width for line in lines):
                 break
+            if size * FIT_STEP < smallest:
+                log.warning("%r does not fit a %.0f x %.0f mm space even at %.1f pt: shown in full, overflowing", s, width, height, size)
+                return lines, size
             size *= FIT_STEP
         if size < floor:
             log.warning("%r needs %.1f pt (below the %.1f pt label size) to fit a %.0f x %.0f mm cell: consider shortening it", s, size, floor, width, height)

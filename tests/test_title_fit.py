@@ -6,10 +6,13 @@ from typing import cast
 
 import pytest
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.font_manager import FontProperties
 from matplotlib.text import Text
+from matplotlib.textpath import TextPath
 
 from blueprint.licences import lookup
-from blueprint.sheet import PNG_DPI, TITLE_BLOCK_W, TITLE_ROW_H, Sheet, TitleInfo
+from blueprint.sheet import CELL_PAD, PNG_DPI, TITLE_BLOCK_W, TITLE_ROW_H, Sheet, TitleInfo
+from blueprint.style import PT_PER_MM
 
 LONG = {
     "material": "PETG OR ABS, 4 WALLS, 40% GYROID INFILL, 0.2 MM LAYERS; ABS IF IT SITS WITHIN 300 MM OF THE ENCLOSURE HEATER, OTHERWISE PETG",
@@ -54,7 +57,9 @@ def test_long_values_stay_inside_the_title_block() -> None:
         assert x1 <= right, f"{t.get_text()!r} runs past the title block"
     for t, (_, y0, _, y1) in texts:
         assert y1 - y0 <= TITLE_ROW_H, f"{t.get_text()!r} is taller than its row"
-    material = next(t for t, _ in texts if t.get_text().startswith("PETG"))
+    material, (_, _, _, top) = next((t, b) for t, b in texts if t.get_text().startswith("PETG"))
+    _, (_, label_bottom, _, _) = next((t, b) for t, b in texts if t.get_text() == "MATERIAL")
+    assert top <= label_bottom, "wrapped lines stay below their cell's label"
     assert "\n" in material.get_text(), "wrapped"
     assert material.get_text().split() == LONG["material"].split(), "every word is shown: nothing is cut"
 
@@ -86,3 +91,45 @@ def test_text_too_long_for_label_size_shrinks_further_and_warns(caplog: pytest.L
     assert size < 4.6 and " ".join(lines).split() == text.split()
     assert len(lines) * sheet.text_height(size) <= 5 and all(sheet.text_width(line, size) <= 50 for line in lines)
     assert "below the 4.6 pt label size" in caplog.text
+
+
+def test_whitespace_values_render() -> None:
+    sheet = Sheet("B")
+    sheet.title_block(_info(material=" ", source="  "), 1.0)
+    assert sheet.text_width("   ", 6.5) > 0
+
+
+def test_fit_text_refuses_no_space_and_always_returns() -> None:
+    sheet = Sheet("B")
+    for width, height in ((0, 5), (-1, 5), (10, 0), (10, -1)):
+        with pytest.raises(ValueError, match="positive width and height"):
+            sheet.fit_text("ABC", width, height, 6.5, 4.6)
+    lines, size = sheet.fit_text("ABC DEF", 1e-3, 5, 6.5, 4.6)  # cannot fit at any readable size: gives up, shows everything
+    assert " ".join(lines) == "ABC DEF" and size > 0
+
+
+def test_fit_text_never_enlarges() -> None:
+    sheet = Sheet("B")
+    text = "WORD " * 30
+    _, size = sheet.fit_text(text, 40, 50, 4.0, 4.6)
+    assert size <= 4.0
+
+
+def test_text_width_restores_dpi_and_covers_the_outline() -> None:
+    sheet = Sheet("B")
+    dpi = sheet.fig.dpi
+    s = "PETG, 4 WALLS, 40% GYROID; ABS IF NEAR THE HEATER"
+    outline = TextPath((0, 0), s, size=6.5, prop=FontProperties(family=sheet.style.type.family)).get_extents().x1 / PT_PER_MM
+    assert sheet.text_width(s, 6.5) >= outline  # at 6.5 pt the outline (the SVG) is wider than the raster
+    assert sheet.fig.dpi == dpi, "measuring leaves the figure's dpi as it was"
+    assert not [t for t in sheet.ax.texts if t.get_text() == s], "the probe is removed"
+
+
+def test_cell_padding_is_kept() -> None:
+    # A value that would only fit by touching the cell's edges is shrunk so it clears them by CELL_PAD.
+    sheet = Sheet("B")
+    third = TITLE_BLOCK_W / 3
+    text = "X" * 40
+    size = 6.5 * (third - CELL_PAD) / sheet.text_width(text, 6.5)  # fits the cell less one pad, not less two
+    lines, fitted = sheet.fit_text(text, third - 2 * CELL_PAD, 5, size, 4.6)
+    assert sheet.text_width(lines[0], fitted) <= third - 2 * CELL_PAD < sheet.text_width(text, size)
