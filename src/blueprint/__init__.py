@@ -4,7 +4,7 @@ Config-only repos use the `blueprint render` CLI; repos that need hand-placed vi
 preview() draws sheet-free README header images.
 """
 
-from .geometry import Projection, load_shape, project, section_loops
+from .geometry import Projection, load_shape, project, section_loops, sight_direction
 from .layout import auto_sheet, view_directions
 from .preview import PreviewLayout, as_shape, preview
 from .revisions import git_dates, revisions
@@ -31,5 +31,6 @@ __all__ = [
     "revisions",
     "scale_label",
     "section_loops",
+    "sight_direction",
     "view_directions",
 ]

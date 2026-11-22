@@ -67,6 +67,8 @@ class Lines:
     extension: float = 0.4
     centre: float = 0.5
     centre_dash: tuple[float, float, float, float] = (9.0, 2.0, 2.0, 2.0)  # long dash, gap, short dash, gap
+    cutting: float = 1.0  # cutting-plane line: thick, so it reads as an instruction rather than geometry
+    cutting_dash: tuple[float, ...] = (12.0, 2.0, 2.0, 2.0, 2.0, 2.0)  # long dash and two short (ASME Y14.2 phantom pattern)
     border_outer: float = 1.4
     border_inner: float = 0.5
     table: float = 0.5
@@ -98,6 +100,7 @@ class Spacing:
     extension_overrun: float = 1.5  # extension line run past its dimension line
     caption_drop: float = 7.0  # caption distance below a view's lowest annotation
     centre_overrun: float = 2.5  # centre mark run past a circle
+    cut_leg: float = 6.0  # cutting-plane line's bent end, from the line to the arrow tip
 
 
 @dataclass(frozen=True)

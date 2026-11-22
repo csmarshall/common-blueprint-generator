@@ -246,6 +246,18 @@ def _keep_facet_silhouettes(shape: TopoDS_Shape, toward_viewer: Vec) -> None:
             builder.Continuity(_as_edge(edge), f1, f2, continuity)
 
 
+def sight_direction(toward_viewer: Vec, up: Vec, section_toward_viewer: Vec) -> tuple[float, float]:
+    """The line of sight of a section, in the frame of the view its cutting plane is drawn on (for View.cut_plane).
+
+    The parent view looks along -toward_viewer with x = up × toward_viewer; the section view looks along -section_toward_viewer. The result is
+    that viewing direction's components on the parent view's x and up axes. A section seen along the parent's own line of sight projects to
+    (0, 0) and cannot be drawn as a cutting-plane line.
+    """
+    x_dir = cross(up, toward_viewer)
+    look = -np.asarray(section_toward_viewer, float)
+    return float(np.dot(look, x_dir)), float(np.dot(look, up))
+
+
 def section_loops(shape: TopoDS_Shape, origin: Vec, toward_viewer: Vec, x_dir: Vec) -> list[Polyline]:
     """Closed outlines of the cut through `shape` on the plane through `origin` facing `toward_viewer`, as the viewer sees them: x along `x_dir`, y up.
 
