@@ -21,6 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib import colors as mcolors  # noqa: E402
+from matplotlib.artist import Artist  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
@@ -574,9 +575,13 @@ class View:
         return float(a[0]), float(a[1]), float(b[0]), float(b[1])
 
     def draw(self, hidden: bool = True, centre_marks: bool = True) -> View:
-        """Draw the hidden lines, then the visible lines, then a centre mark through every circle seen face on."""
+        """Draw the hidden lines, then the visible lines, then a centre mark through every circle seen face on, then any section hatching.
+
+        A cropped projection (Projection.cropped) is clipped to its circle, so everything drawn ends on it.
+        """
         st = self.sheet.style
         ln, pal = st.lines, st.palette
+        first_line, first_patch = len(self.sheet.ax.lines), len(self.sheet.ax.patches)
         if hidden:
             for line in self.proj.hidden:
                 s = self.to_sheet(line)
@@ -590,7 +595,37 @@ class View:
                 reach = r * self.scale + st.spacing.centre_overrun
                 self.sheet.centre_line((c[0] - reach, c[1]), (c[0] + reach, c[1]))
                 self.sheet.centre_line((c[0], c[1] - reach), (c[0], c[1] + reach))
+        if self.proj.section:
+            self.hatch(self.proj.section)
+        self._clip(self.sheet.ax.lines[first_line:], self.sheet.ax.patches[first_patch:])
+        if self.proj.clip is not None:  # frame the detail, so its edge reads as a crop and not as part outline
+            cx, cy, r = self.proj.clip
+            c = self.to_sheet((cx, cy))[0]
+            self.sheet.ax.add_patch(Circle((float(c[0]), float(c[1])), r * self.scale, fc="none", ec=pal.dim, lw=ln.dim))
         return self
+
+    def _clip(self, *groups: Sequence[Artist]) -> None:
+        """Clip these artists to the projection's crop circle, if it has one."""
+        if self.proj.clip is None:
+            return
+        cx, cy, r = self.proj.clip
+        c = self.to_sheet((cx, cy))[0]
+        circle = Circle((float(c[0]), float(c[1])), r * self.scale, transform=self.sheet.ax.transData)
+        for group in groups:
+            for artist in group:
+                artist.set_clip_path(circle)
+
+    def detail_circle(self, centre: tuple[float, float], r: float, letter: str) -> None:
+        """Mark the area an enlarged detail shows: a circle of radius r (model mm) about centre on this view, lettered outside its upper right.
+
+        Drawn in the cutting-plane line's weight and dash, the ASME Y14.3 boundary for a detail.
+        """
+        st = self.sheet.style
+        c = self.to_sheet(centre)[0]
+        rs = r * self.scale
+        self.sheet.ax.add_patch(Circle((float(c[0]), float(c[1])), rs, fc="none", ec=st.palette.ink, lw=st.lines.cutting, linestyle=(0, st.lines.cutting_dash)))
+        at = c + (rs + st.type.caption / PT_PER_MM * TEXT_HEIGHT_EM) * np.array([math.cos(math.pi / 4), math.sin(math.pi / 4)])
+        self.sheet.text(float(at[0]), float(at[1]), letter, st.type.caption, ha="center", va="center", weight="bold")
 
     def dim_h(self, x0: float, x1: float, y_ref: float, offset: float, text: str | None = None, ext: bool = True) -> None:
         """Horizontal dimension between model x0 and x1, drawn `offset` sheet mm above (positive) or below model y_ref."""
