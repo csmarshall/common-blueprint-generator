@@ -34,6 +34,9 @@ Line widths in points and dash patterns, from the clean sheet.
 | `extension` | `0.4` |  |
 | `centre` | `0.5` |  |
 | `centre_dash` | `(9.0, 2.0, 2.0, 2.0)` | long dash, gap, short dash, gap |
+| `cutting` | `1.0` | cutting-plane line: thick, so it reads as an instruction rather than geometry |
+| `cutting_dash` | `(12.0, 2.0, 2.0, 2.0, 2.0, 2.0)` | long dash and two short (ASME Y14.2 phantom pattern) |
+| `cutting_arrow` | `9.0` | arrowhead size at the cutting-plane line's ends (matplotlib mutation scale, points) |
 | `border_outer` | `1.4` |  |
 | `border_inner` | `0.5` |  |
 | `table` | `0.5` |  |
@@ -67,6 +70,7 @@ Sheet-millimetre distances used by the layout and the annotation helpers.
 | `extension_overrun` | `1.5` | extension line run past its dimension line |
 | `caption_drop` | `7.0` | caption distance below a view's lowest annotation |
 | `centre_overrun` | `2.5` | centre mark run past a circle |
+| `cut_leg` | `6.0` | cutting-plane line's bent end, from the line to the arrow tip |
 
 ## Toggles
 

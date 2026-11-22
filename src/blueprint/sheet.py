@@ -52,6 +52,8 @@ CELL_HEAD_TOP = 1.2  # mm from a cell's top to its label
 CELL_BODY_BOTTOM = 1.3  # mm from a cell's bottom to its text baseline
 FIT_MIN_FRACTION = 0.25  # fitting gives up below this fraction of the label size (unreadable anyway) rather than shrink forever
 FIT_STEP = 0.97  # each step down when shrinking text to fit a cell; smaller steps fit tighter but measure more often
+MIN_CUT_LENGTH = 1e-6  # mm; a cutting-plane line shorter than this has no direction
+MIN_SIGHT = 1e-9  # a sight (or its unit component across the line) smaller than this says no side
 TEXT_HEIGHT_EM = 1.2  # a line of lettering is this many font sizes tall, ascender to descender
 PNG_DPI = 150  # 2550 px across an ANSI B sheet; the SVG is the scalable copy, so the PNG only needs to be a sharp preview
 
@@ -141,6 +143,40 @@ class Canvas:
             rotation=90 if vertical else 0,
             bbox={"boxstyle": "square,pad=0.15", "fc": pal.paper, "ec": "none"},
         )
+
+    def cut_plane(self, a: tuple[float, float], b: tuple[float, float], letter: str, sight: tuple[float, float]) -> None:
+        """A cutting-plane line from a to b (sheet mm) for section `letter`, viewed in the direction `sight`.
+
+        Drawn the ASME Y14.2 way: a thick long-dash-two-short line whose ends bend 90 degrees toward the side the section is seen from, each
+        ending in an arrowhead pointing along the line of sight, with the letter beyond the arrow. Only the side of `sight` matters (its component
+        across the line); a sight along the line has no side and is refused.
+        """
+        st, ln, sp = self.style, self.style.lines, self.style.spacing
+        pa, pb = np.asarray(a, float), np.asarray(b, float)
+        run = pb - pa
+        length = float(np.hypot(*run))
+        if length < MIN_CUT_LENGTH:
+            raise ValueError(f"cutting plane {letter}: the line from {a} to {b} has no length")
+        normal = np.array([-run[1], run[0]]) / length
+        look = np.asarray(sight, float)
+        if not np.all(np.isfinite(look)) or not np.hypot(*look) >= MIN_SIGHT:
+            raise ValueError(f"cutting plane {letter}: sight {sight} has no direction (a section seen along this view's own line of sight can't be drawn)")
+        across = float(np.dot(look, normal)) / float(np.hypot(*look))
+        if not abs(across) >= MIN_SIGHT:
+            raise ValueError(f"cutting plane {letter}: sight {sight} runs along the line, so it says neither side")
+        side = normal * math.copysign(1.0, across)  # unit vector across the line toward the side the section looks at
+        self.ax.plot([pa[0], pb[0]], [pa[1], pb[1]], color=st.palette.ink, lw=ln.cutting, dashes=ln.cutting_dash, solid_capstyle="butt")
+        letter_gap = st.type.caption / PT_PER_MM * TEXT_HEIGHT_EM
+        for end in (pa, pb):
+            tip = end + side * sp.cut_leg
+            self.ax.annotate(
+                "",
+                xy=(float(tip[0]), float(tip[1])),
+                xytext=(float(end[0]), float(end[1])),
+                arrowprops={"arrowstyle": "-|>", "color": st.palette.ink, "lw": ln.cutting, "shrinkA": 0, "shrinkB": 0, "mutation_scale": ln.cutting_arrow},
+            )
+            at = tip + side * letter_gap
+            self.text(float(at[0]), float(at[1]), letter, st.type.caption, ha="center", va="center", weight="bold")
 
     def leader(self, at: tuple[float, float], text_at: tuple[float, float], text: str, ha: str = "left") -> None:
         """A callout: text with a thin arrow to the feature."""
@@ -599,6 +635,14 @@ class View:
         """A callout from a model point to text at a sheet position."""
         at = self.to_sheet(model_xy)[0]
         self.sheet.leader((float(at[0]), float(at[1])), text_at, text, ha)
+
+    def cut_plane(self, a: tuple[float, float], b: tuple[float, float], letter: str, sight: tuple[float, float]) -> None:
+        """A cutting-plane line between model view-plane points a and b, for section `letter` seen along `sight` (view-plane direction).
+
+        `sight_direction(this view's toward_viewer, up, the section's toward_viewer)` gives it. See Canvas.cut_plane for how it is drawn.
+        """
+        pa, pb = self.to_sheet(a)[0], self.to_sheet(b)[0]
+        self.sheet.cut_plane((float(pa[0]), float(pa[1])), (float(pb[0]), float(pb[1])), letter, sight)
 
     def caption(self, name: str, detail: str = "", below: float | None = None) -> None:
         """Caption centred under the view, `below` sheet mm under its outline (default: clear of an overall dimension)."""
