@@ -13,7 +13,7 @@ import numpy as np
 from OCP.TopoDS import TopoDS_Shape
 
 from .geometry import Projection, Vec, cross, project
-from .sheet import Sheet, View
+from .sheet import TEXT_HEIGHT_EM, Sheet, View
 from .style import PT_PER_MM, STANDARD_SCALES
 
 log = logging.getLogger(__name__)
@@ -25,7 +25,6 @@ DEFAULT_ISO_SIZE = 1.0  # isometric scale as a multiple of the main scale; None 
 ISO_MIN_FRACTION = 0.45  # the isometric beside other views is drawn at least this fraction of the main scale, or the main scale steps down
 ISO_FILL = 0.92  # an isometric drawn alone fills this fraction of the free space
 CLEARANCE = 2.0  # sheet mm between any annotation and the border, title block or revision block
-TEXT_HEIGHT_EM = 1.2  # a line of text is this many font sizes tall, ascender to descender
 MIN_EXTENT = 1e-6  # mm; a view seen exactly edge-on has zero width or height
 REV_ROWS_RESERVED = 2  # the revision block's rows (initial release + current), as Sheet draws it from git
 
