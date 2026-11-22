@@ -69,6 +69,7 @@ class Lines:
     centre_dash: tuple[float, float, float, float] = (9.0, 2.0, 2.0, 2.0)  # long dash, gap, short dash, gap
     cutting: float = 1.0  # cutting-plane line: thick, so it reads as an instruction rather than geometry
     cutting_dash: tuple[float, ...] = (12.0, 2.0, 2.0, 2.0, 2.0, 2.0)  # long dash and two short (ASME Y14.2 phantom pattern)
+    cutting_arrow: float = 9.0  # arrowhead size at the cutting-plane line's ends (matplotlib mutation scale, points)
     border_outer: float = 1.4
     border_inner: float = 0.5
     table: float = 0.5

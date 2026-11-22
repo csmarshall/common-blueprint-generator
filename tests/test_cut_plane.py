@@ -11,8 +11,13 @@ from blueprint.layout import view_directions
 
 
 def _arrows(sheet: Sheet) -> list[tuple[np.ndarray, np.ndarray]]:
-    """(tail, tip) of every arrow drawn, in sheet mm."""
-    return [(np.array(a.xyann, float), np.array(a.xy, float)) for a in sheet.ax.texts if isinstance(a, Annotation)]
+    """(tail, tip) of every arrow drawn, in sheet mm, checking each has its head at the tip (matplotlib draws "-|>" with the head at xy)."""
+    found = []
+    for a in sheet.ax.texts:
+        if isinstance(a, Annotation):
+            assert a.arrowprops is not None and a.arrowprops["arrowstyle"] == "-|>", "the arrowhead is at the tip, pointing along the sight"
+            found.append((np.array(a.xyann, float), np.array(a.xy, float)))
+    return found
 
 
 def _letters(sheet: Sheet, letter: str) -> list[np.ndarray]:
@@ -37,8 +42,18 @@ def test_arrows_point_to_the_sight_side_of_a_vertical_line(sight: tuple[float, f
         assert np.dot(at - tip, side) > 0, "the letter sits beyond the arrow tip"
 
 
+def test_horizontal_line_arrows_point_down_when_seen_from_above() -> None:
+    sheet = Sheet("B")
+    sheet.cut_plane((40, 100), (140, 100), "B", (0, -1))
+    for tail, tip in _arrows(sheet):
+        assert tip[1] < tail[1] and tip[0] == pytest.approx(tail[0])
+
+
 def test_bad_lines_are_refused() -> None:
     sheet = Sheet("B")
+    for sight in ((0, 0), (float("nan"), 1)):
+        with pytest.raises(ValueError, match="has no direction"):
+            sheet.cut_plane((10, 10), (10, 50), "A", sight)
     with pytest.raises(ValueError, match="no length"):
         sheet.cut_plane((10, 10), (10, 10), "A", (1, 0))
     with pytest.raises(ValueError, match="runs along the line"):

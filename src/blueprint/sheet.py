@@ -53,6 +53,7 @@ CELL_BODY_BOTTOM = 1.3  # mm from a cell's bottom to its text baseline
 FIT_MIN_FRACTION = 0.25  # fitting gives up below this fraction of the label size (unreadable anyway) rather than shrink forever
 FIT_STEP = 0.97  # each step down when shrinking text to fit a cell; smaller steps fit tighter but measure more often
 MIN_CUT_LENGTH = 1e-6  # mm; a cutting-plane line shorter than this has no direction
+MIN_SIGHT = 1e-9  # a sight (or its unit component across the line) smaller than this says no side
 TEXT_HEIGHT_EM = 1.2  # a line of lettering is this many font sizes tall, ascender to descender
 PNG_DPI = 150  # 2550 px across an ANSI B sheet; the SVG is the scalable copy, so the PNG only needs to be a sharp preview
 
@@ -157,8 +158,11 @@ class Canvas:
         if length < MIN_CUT_LENGTH:
             raise ValueError(f"cutting plane {letter}: the line from {a} to {b} has no length")
         normal = np.array([-run[1], run[0]]) / length
-        across = float(np.dot(np.asarray(sight, float), normal))
-        if abs(across) < 1e-9:
+        look = np.asarray(sight, float)
+        if not np.all(np.isfinite(look)) or not np.hypot(*look) >= MIN_SIGHT:
+            raise ValueError(f"cutting plane {letter}: sight {sight} has no direction (a section seen along this view's own line of sight can't be drawn)")
+        across = float(np.dot(look, normal)) / float(np.hypot(*look))
+        if not abs(across) >= MIN_SIGHT:
             raise ValueError(f"cutting plane {letter}: sight {sight} runs along the line, so it says neither side")
         side = normal * math.copysign(1.0, across)  # unit vector across the line toward the side the section looks at
         self.ax.plot([pa[0], pb[0]], [pa[1], pb[1]], color=st.palette.ink, lw=ln.cutting, dashes=ln.cutting_dash, solid_capstyle="butt")
@@ -169,7 +173,7 @@ class Canvas:
                 "",
                 xy=(float(tip[0]), float(tip[1])),
                 xytext=(float(end[0]), float(end[1])),
-                arrowprops={"arrowstyle": "-|>", "color": st.palette.ink, "lw": ln.cutting, "shrinkA": 0, "shrinkB": 0, "mutation_scale": 9},
+                arrowprops={"arrowstyle": "-|>", "color": st.palette.ink, "lw": ln.cutting, "shrinkA": 0, "shrinkB": 0, "mutation_scale": ln.cutting_arrow},
             )
             at = tip + side * letter_gap
             self.text(float(at[0]), float(at[1]), letter, st.type.caption, ha="center", va="center", weight="bold")
