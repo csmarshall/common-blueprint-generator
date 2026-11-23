@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -15,10 +15,11 @@ from OCP.Bnd import Bnd_Box
 from OCP.BndLib import BndLib_Add3dCurve
 from OCP.BRep import BRep_Builder
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Section
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Sewing
 from OCP.BRepLib import BRepLib
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pln, gp_Pnt
 from OCP.HLRAlgo import HLRAlgo_Projector
@@ -35,6 +36,7 @@ log = logging.getLogger(__name__)
 
 Vec = tuple[float, float, float]
 Polyline = np.ndarray  # N x 2, view-plane millimetres
+SECTION_MARGIN = 1.0  # mm the section's keep-box overhangs the part on every side
 
 CURVE_SAMPLES = 28  # points per projected curved edge
 SMOOTH_ANGLE_DEG = 20.0  # edges where faces meet flatter than this are facets of one smooth surface and are not drawn
@@ -56,6 +58,8 @@ class Projection:
     straight: list[Polyline] = field(default_factory=list)  # visible straight edges, two points each
     circles: list[tuple[float, float, float]] = field(default_factory=list)  # visible full circles seen face on: (cx, cy, r)
     extent: tuple[float, float, float, float] | None = None  # exact (xmin, ymin, xmax, ymax) of the visible edges, from their curves
+    section: list[Polyline] = field(default_factory=list)  # closed outlines of a cut face, hatched when drawn (see section_view)
+    clip: tuple[float, float, float] | None = None  # (cx, cy, r): only what lies inside this circle is drawn (see cropped)
 
     def bounds(self) -> tuple[float, float, float, float]:
         """(xmin, ymin, xmax, ymax) of the visible outline: exact from the curves when known, else from the sampled polylines.
@@ -78,6 +82,24 @@ class Projection:
             [p * k for p in self.straight],
             [(x * k, y * k, r * k) for x, y, r in self.circles],
             extent,
+            [p * k for p in self.section],
+            None if self.clip is None else (self.clip[0] * k, self.clip[1] * k, self.clip[2] * k),
+        )
+
+    def cropped(self, centre: tuple[float, float], r: float) -> Projection:
+        """The part of this view inside the circle of radius r about centre, for an enlarged detail view.
+
+        The geometry is kept whole and clipped exactly when drawn, so lines, hatching and centre marks all end on the circle. The view's bounds
+        become the circle's, so a detail view is placed and sized by the circle it shows.
+        """
+        if not r > 0:
+            raise ValueError(f"a detail needs a positive radius, not {r!r}")
+        cx, cy = centre
+        return replace(
+            self,
+            circles=[c for c in self.circles if math.hypot(c[0] - cx, c[1] - cy) < r + c[2]],
+            extent=(cx - r, cy - r, cx + r, cy + r),
+            clip=(cx, cy, r),
         )
 
 
@@ -244,6 +266,53 @@ def _keep_facet_silhouettes(shape: TopoDS_Shape, toward_viewer: Vec) -> None:
             smooth = float(np.dot(n1, n2)) > cos_smooth
             continuity = GeomAbs_Shape.GeomAbs_C1 if smooth and not silhouette else GeomAbs_Shape.GeomAbs_C0
             builder.Continuity(_as_edge(edge), f1, f2, continuity)
+
+
+def beyond(shape: TopoDS_Shape, origin: Vec, toward_viewer: Vec, depth: float | None = None) -> TopoDS_Shape:
+    """The material of `shape` on the far side of the plane through `origin` facing `toward_viewer`.
+
+    That is what a section view looking along -toward_viewer sees once the near part is cut away. With `depth`, only material within that
+    distance of the plane is kept.
+    """
+    t = np.array(toward_viewer, float)  # a copy: never normalise the caller's array in place
+    t = t / np.linalg.norm(t)
+    lo, hi = (np.asarray(c) for c in bounding_box(shape))
+    # A box built in the plane's frame, wider than the part from wherever the plane sits, so it keeps everything beyond the plane.
+    span = 2 * (float(np.linalg.norm(hi - lo)) + float(np.linalg.norm((lo + hi) / 2 - np.asarray(origin, float)))) + SECTION_MARGIN
+    reach = span if depth is None else depth
+    if not reach > 0:
+        raise ValueError(f"a section's depth must be positive, not {depth!r}")
+    helper = np.array([1.0, 0.0, 0.0]) if abs(t[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    x_dir = np.cross(helper, t)
+    x_dir /= np.linalg.norm(x_dir)
+    y_dir = np.cross(t, x_dir)
+    corner = np.asarray(origin, float) - t * reach - (x_dir + y_dir) * span / 2
+    frame = gp_Ax2(gp_Pnt(*corner), gp_Dir(*t), gp_Dir(*x_dir))  # box z along t, from `reach` behind the plane up to it
+    box = BRepPrimAPI_MakeBox(frame, span, span, reach).Shape()
+    common = BRepAlgoAPI_Common(shape, box)
+    common.Build()
+    if not common.IsDone():
+        raise ValueError("the section cut failed")
+    return common.Shape()
+
+
+def section_view(shape: TopoDS_Shape, origin: Vec, toward_viewer: Vec, up: Vec, depth: float | None = None) -> Projection:
+    """A section view: the material beyond the cutting plane through `origin`, seen from `toward_viewer` with `up` up the page.
+
+    The cut face's outlines are attached for hatching. Hidden lines are left out, as is usual in a section view.
+
+    View.draw hatches the cut face. The frame is project()'s, so cut_plane arrows drawn with sight_direction match it.
+    """
+    t = np.array(toward_viewer, float)
+    u = np.array(up, float)
+    t, u = t / np.linalg.norm(t), u / np.linalg.norm(u)  # section_loops needs unit vectors; project() and beyond() accept any length
+    toward: Vec = (float(t[0]), float(t[1]), float(t[2]))
+    up_unit: Vec = (float(u[0]), float(u[1]), float(u[2]))
+    loops = section_loops(shape, origin, toward, cross(up_unit, toward))
+    if not loops:  # checked first: a plane clear of the part on the near side would leave nothing to project
+        raise ValueError(f"the plane through {origin} facing {toward_viewer} does not cut the part")
+    projection = project(beyond(shape, origin, toward, depth), toward, up_unit)
+    return replace(projection, hidden=[], section=loops)
 
 
 def sight_direction(toward_viewer: Vec, up: Vec, section_toward_viewer: Vec) -> tuple[float, float]:
