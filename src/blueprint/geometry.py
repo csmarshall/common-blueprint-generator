@@ -32,6 +32,8 @@ from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 
+from .mesh import stl_triangle_count
+
 log = logging.getLogger(__name__)
 
 Vec = tuple[float, float, float]
@@ -42,6 +44,7 @@ CURVE_SAMPLES = 28  # points per projected curved edge
 SMOOTH_ANGLE_DEG = 20.0  # edges where faces meet flatter than this are facets of one smooth surface and are not drawn
 FULL_CIRCLE_RAD = 2 * math.pi - 1e-3
 MESH_SEW_TOL = 1e-4  # mm; STL vertices shared by two triangles are written identically, so this only absorbs float noise
+MESH_OCC_MAX_TRIANGLES = 150_000  # more triangles than this cannot be sewn and hidden-line-removed in reasonable time (326k never finished sewing)
 MESH_COPLANAR_DEG = 0.05  # triangles whose normals differ by less than this are one flat face
 
 # TopoDS's downcast is Edge_s in OCP 7.9 (cadquery) and Edge in OCP 8 (build123d); the package has to run under both.
@@ -117,6 +120,12 @@ def load_shape(path: Path) -> TopoDS_Shape:
         reader.TransferRoots()
         shape = reader.OneShape()
     elif suffix == ".stl":
+        triangles = stl_triangle_count(path)
+        if triangles > MESH_OCC_MAX_TRIANGLES:
+            raise ValueError(
+                f"{path.name} has {triangles:,} triangles; the mesh path is limited to {MESH_OCC_MAX_TRIANGLES:,} "
+                "(sewing and hidden-line removal would not finish). Decimate the mesh, or export a STEP file of the part."
+            )
         shape = TopoDS_Shape()
         if not StlAPI_Reader().Read(shape, str(path)):
             raise ValueError(f"could not read STL file {path}")

@@ -133,3 +133,27 @@ def test_unsupported_format(tmp_path: Path) -> None:
     bad.write_text("")
     with pytest.raises(ValueError, match="unsupported"):
         load_shape(bad)
+
+
+def test_oversized_mesh_fails_fast_with_a_clear_message(block_stl: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mesh over the triangle limit is refused up front, naming the file, the count, the limit and what to do, instead of hanging in sewing."""
+    import blueprint.geometry as geometry
+
+    monkeypatch.setattr(geometry, "MESH_OCC_MAX_TRIANGLES", 10)
+    with pytest.raises(ValueError, match=r"block\.stl has [\d,]+ triangles.*limited to 10.*Decimate.*STEP"):
+        load_shape(block_stl)
+
+
+def test_stl_triangle_count_reads_ascii_and_binary(block_stl: Path, tmp_path: Path) -> None:
+    """The count comes from the header for binary files and from the facet records for ASCII, and matches the parsed triangles."""
+    from blueprint.mesh import read_stl, stl_triangle_count
+
+    n = stl_triangle_count(block_stl)  # the fixture is ASCII
+    assert n == len(read_stl(block_stl)) > 12
+    triangles = read_stl(block_stl).astype("<f4")
+    binary = tmp_path / "block_bin.stl"
+    record = np.zeros(n, dtype=[("normal", "<f4", 3), ("v", "<f4", (3, 3)), ("attr", "<u2")])
+    record["v"] = triangles
+    binary.write_bytes(b"\0" * 80 + np.uint32(n).tobytes() + record.tobytes())
+    assert stl_triangle_count(binary) == n
+    assert np.allclose(read_stl(binary), triangles)
