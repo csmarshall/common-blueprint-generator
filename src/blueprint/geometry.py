@@ -60,6 +60,9 @@ class Projection:
     extent: tuple[float, float, float, float] | None = None  # exact (xmin, ymin, xmax, ymax) of the visible edges, from their curves
     section: list[Polyline] = field(default_factory=list)  # closed outlines of a cut face, hatched when drawn (see section_view)
     clip: tuple[float, float, float] | None = None  # (cx, cy, r): only what lies inside this circle is drawn (see cropped)
+    frame: tuple[Vec, Vec] | None = (
+        None  # (toward_viewer, up) this view was projected with, so model points and axes can be mapped into it (see View.centre_line)
+    )
 
     def bounds(self) -> tuple[float, float, float, float]:
         """(xmin, ymin, xmax, ymax) of the visible outline: exact from the curves when known, else from the sampled polylines.
@@ -84,6 +87,7 @@ class Projection:
             extent,
             [p * k for p in self.section],
             None if self.clip is None else (self.clip[0] * k, self.clip[1] * k, self.clip[2] * k),
+            self.frame,
         )
 
     def cropped(self, centre: tuple[float, float], r: float) -> Projection:
@@ -196,7 +200,7 @@ def project(shape: TopoDS_Shape, toward_viewer: Vec, up: Vec) -> Projection:
     algo.Update()
     algo.Hide()
     out = HLRBRep_HLRToShape(algo)
-    view = Projection([], [])
+    view = Projection([], [], frame=(toward_viewer, up))
     box = Bnd_Box()
     for edge in _edges(out.VCompound()) + _edges(out.OutLineVCompound()):
         pts, kind, curve = _sample(edge)
