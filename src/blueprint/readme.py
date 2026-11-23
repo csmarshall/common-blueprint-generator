@@ -23,7 +23,10 @@ PROJECT_NAME = "common-blueprint-generator"
 PROJECT_URL = "https://github.com/csmarshall/common-blueprint-generator"
 SUPPORT_URL = "https://buymeacoffee.com/cs_marshall"
 # A `uses:` line calling this project's reusable render workflow: from a caller repo by URL, or from this repo itself (publish.yml dogfoods it).
-RENDER_WORKFLOW = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?(?:csmarshall/common-blueprint-generator/|\./)\.github/workflows/render\.yml\b", re.MULTILINE)
+# Matches any trigger (push, dispatch, schedule): the claim is about who renders, and every caller so far renders on push.
+RENDER_WORKFLOW = re.compile(
+    r"^\s*(?:-\s*)?uses:\s*['\"]?(?:csmarshall/common-blueprint-generator/|\./)\.github/workflows/render\.yml(?=[@'\"\s]|$)", re.MULTILINE | re.IGNORECASE
+)
 SHEET = "blueprint"  # marker kind for a drawing sheet
 PREVIEW = "blueprint-preview"  # marker kind for a preview
 
@@ -44,8 +47,14 @@ def renders_in_ci(readme: Path) -> bool:
     for root in [readme.resolve().parent, *readme.resolve().parent.parents]:
         if (root / ".git").exists():
             workflows = root / ".github" / "workflows"
-            files = sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")]) if workflows.is_dir() else []
-            return any(RENDER_WORKFLOW.search(f.read_text()) for f in files)
+            files = sorted(f for f in [*workflows.glob("*.yml"), *workflows.glob("*.yaml")] if f.is_file()) if workflows.is_dir() else []
+            for f in files:
+                if RENDER_WORKFLOW.search(f.read_text(encoding="utf-8", errors="replace")):
+                    log.debug("%s calls the render workflow: the credit claims a re-render on every change", f)
+                    return True
+            log.debug("no workflow under %s calls the render workflow: the credit makes no re-render claim", workflows)
+            return False
+    log.debug("%s is not inside a git repo: the credit makes no re-render claim", readme)
     return False
 
 

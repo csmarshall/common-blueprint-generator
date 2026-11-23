@@ -13,6 +13,7 @@ CLAIM = "on every change to the model"
 
 def _repo(tmp_path: Path, workflow: str | None, name: str = "publish.yml", git_file: bool = False) -> Path:
     """A fake repo root: .git (a directory, or a file as in a worktree), optionally one workflow, and a README one level down."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / ".git").write_text("gitdir: elsewhere\n") if git_file else (tmp_path / ".git").mkdir()
     if workflow is not None:
         (tmp_path / ".github" / "workflows").mkdir(parents=True)
@@ -26,11 +27,13 @@ CALLS = [
     "jobs:\n  render:\n    uses: csmarshall/common-blueprint-generator/.github/workflows/render.yml@v1\n",
     "jobs:\n  render:\n    uses: ./.github/workflows/render.yml\n",
     "jobs:\n  render:\n    uses: 'csmarshall/common-blueprint-generator/.github/workflows/render.yml@main'\n",
+    "jobs:\r\n  render:\r\n    uses: CSMarshall/common-blueprint-generator/.github/workflows/render.yml@v1  # owner names are case-insensitive\r\n",
 ]
 # Not a call: a comment quoting the line (as release.yml does), another project's render.yml, a repo with no render workflow.
 NOT_CALLS = [
     "#       uses: csmarshall/common-blueprint-generator/.github/workflows/render.yml@v1\n",
     "jobs:\n  r:\n    uses: someone/else/.github/workflows/render.yml@v1\n",
+    "jobs:\n  r:\n    uses: csmarshall/common-blueprint-generator/.github/workflows/render.yml.old\n",
     "jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make blueprint\n",
 ]
 
@@ -67,6 +70,29 @@ def test_explicit_override(tmp_path: Path) -> None:
     assert CLAIM not in embed(readme, readme.parent / "a.svg", "A", "a.step", ci=False)
 
 
+def test_outside_any_repo(tmp_path: Path) -> None:
+    (tmp_path / "README.md").touch()
+    assert not renders_in_ci(tmp_path / "README.md")
+
+
+def test_nearest_repo_wins(tmp_path: Path) -> None:
+    """A nested repo with no render workflow does not inherit the outer repo's."""
+    _repo(tmp_path, CALLS[0])
+    inner = _repo(tmp_path / "part" / "inner", None)
+    assert renders_in_ci(tmp_path / "part" / "README.md") and not renders_in_ci(inner)
+
+
+def test_unreadable_entries_do_not_crash(tmp_path: Path) -> None:
+    readme = _repo(tmp_path, None)
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "dir.yml").mkdir()
+    (tmp_path / ".github" / "workflows" / "latin1.yml").write_bytes(b"name: caf\xe9\n")
+    assert not renders_in_ci(readme)
+
+
 def test_this_repo_renders_in_ci() -> None:
     """This repo's own README keeps the claim: publish.yml calls render.yml, so the example's embed must not change."""
-    assert renders_in_ci(Path(__file__).resolve().parents[1] / "README.md")
+    root = Path(__file__).resolve().parents[1]
+    if not (root / ".git").exists():
+        pytest.skip("not a git checkout (sdist)")
+    assert renders_in_ci(root / "README.md")
