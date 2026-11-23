@@ -11,9 +11,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
-from OCP.TopoDS import TopoDS_Shape
 
-from .geometry import Projection, Vec, cross, project
+from .geometry import Model, Projection, Vec, cross, project
 from .sheet import TEXT_HEIGHT_EM, CentreLine, Sheet, View
 from .style import PT_PER_MM, STANDARD_SCALES
 
@@ -82,7 +81,7 @@ def _pads(sheet: Sheet) -> tuple[float, float]:
 
 def auto_sheet(
     sheet: Sheet,
-    shape: TopoDS_Shape,
+    shape: Model,
     front: str = "+Z",
     up: str = "+Y",
     captions: dict[str, str] | None = None,

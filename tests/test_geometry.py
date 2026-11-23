@@ -139,8 +139,8 @@ def test_oversized_mesh_fails_fast_with_a_clear_message(block_stl: Path, monkeyp
     """A mesh over the triangle limit is refused up front, naming the file, the count, the limit and what to do, instead of hanging in sewing."""
     import blueprint.geometry as geometry
 
-    monkeypatch.setattr(geometry, "MESH_OCC_MAX_TRIANGLES", 10)
-    with pytest.raises(ValueError, match=r"block\.stl has [\d,]+ triangles.*limited to 10.*Decimate.*STEP"):
+    monkeypatch.setattr(geometry, "MESH_MAX_TRIANGLES", 10)
+    with pytest.raises(ValueError, match=r"block\.stl has [\d,]+ triangles.*limit is 10.*Decimate.*STEP"):
         load_shape(block_stl)
 
 

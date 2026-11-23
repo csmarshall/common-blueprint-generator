@@ -19,7 +19,7 @@ Point it at a STEP file and it draws a third-angle drawing on an ANSI B sheet: h
 
 ## Use it in a repo
 
-1. **Export a STEP file** of the part you want drawn. In build123d that's `export_step(part, "build/part.step")`; in cadquery it's `cq.exporters.export(part, "build/part.step")`. An STL also works, but curves then draw as facets.
+1. **Export a STEP file** of the part you want drawn. In build123d that's `export_step(part, "build/part.step")`; in cadquery it's `cq.exporters.export(part, "build/part.step")`. An STL also works, but curves then draw as facets; a large one (over 100,000 triangles, up to 5 million) is drawn by a fast mesh path that cannot cut sections.
 2. **Add `blueprint.yml`** next to it:
 
    ```yaml

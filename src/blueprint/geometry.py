@@ -9,6 +9,7 @@ import logging
 import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TypeAlias
 
 import numpy as np
 from OCP.Bnd import Bnd_Box
@@ -32,11 +33,12 @@ from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 
-from .mesh import stl_triangle_count
+from .mesh import MeshModel, load_mesh, project_mesh, stl_triangle_count
 
 log = logging.getLogger(__name__)
 
 Vec = tuple[float, float, float]
+Model: TypeAlias = TopoDS_Shape | MeshModel
 Polyline = np.ndarray  # N x 2, view-plane millimetres
 SECTION_MARGIN = 1.0  # mm the section's keep-box overhangs the part on every side
 
@@ -44,7 +46,11 @@ CURVE_SAMPLES = 28  # points per projected curved edge
 SMOOTH_ANGLE_DEG = 20.0  # edges where faces meet flatter than this are facets of one smooth surface and are not drawn
 FULL_CIRCLE_RAD = 2 * math.pi - 1e-3
 MESH_SEW_TOL = 1e-4  # mm; STL vertices shared by two triangles are written identically, so this only absorbs float noise
-MESH_OCC_MAX_TRIANGLES = 150_000  # more triangles than this cannot be sewn and hidden-line-removed in reasonable time (326k never finished sewing)
+# An STL above MESH_FAST_MIN_TRIANGLES takes the numpy fast path (mesh.py); at or below it, the sewn-shell OCC path. Measured: a 70k-triangle mesh takes
+# 16 s to sew and about 5.5 s a view, which is fine, while a 326k-triangle one did not finish sewing in 10 minutes. The OCC path is kept below the line
+# because it is the one validated against exact STEP output and it must keep rendering existing sheets byte for byte.
+MESH_FAST_MIN_TRIANGLES = 100_000
+MESH_MAX_TRIANGLES = 5_000_000  # beyond this even the fast path needs too much memory and time: decimate first
 MESH_COPLANAR_DEG = 0.05  # triangles whose normals differ by less than this are one flat face
 
 # TopoDS's downcast is Edge_s in OCP 7.9 (cadquery) and Edge in OCP 8 (build123d); the package has to run under both.
@@ -110,8 +116,11 @@ class Projection:
         )
 
 
-def load_shape(path: Path) -> TopoDS_Shape:
-    """Read a STEP file exactly, or an STL as a sewn triangle shell (round features then draw as polygons)."""
+def load_shape(path: Path) -> Model:
+    """Read a STEP file exactly, or an STL: as a sewn triangle shell for a modest mesh, as a MeshModel above MESH_FAST_MIN_TRIANGLES.
+
+    Round features of a mesh draw as polygons either way.
+    """
     suffix = path.suffix.lower()
     if suffix in (".step", ".stp"):
         reader = STEPControl_Reader()
@@ -121,11 +130,14 @@ def load_shape(path: Path) -> TopoDS_Shape:
         shape = reader.OneShape()
     elif suffix == ".stl":
         triangles = stl_triangle_count(path)
-        if triangles > MESH_OCC_MAX_TRIANGLES:
+        if triangles > MESH_MAX_TRIANGLES:
             raise ValueError(
-                f"{path.name} has {triangles:,} triangles; the mesh path is limited to {MESH_OCC_MAX_TRIANGLES:,} "
-                "(sewing and hidden-line removal would not finish). Decimate the mesh, or export a STEP file of the part."
+                f"{path.name} has {triangles:,} triangles; the limit is {MESH_MAX_TRIANGLES:,} (more would not finish in reasonable time or memory). "
+                "Decimate the mesh, or export a STEP file of the part."
             )
+        if triangles > MESH_FAST_MIN_TRIANGLES:
+            log.warning("%s has %s triangles: using the fast mesh path (curved features draw as facets)", path.name, f"{triangles:,}")
+            return load_mesh(path)
         shape = TopoDS_Shape()
         if not StlAPI_Reader().Read(shape, str(path)):
             raise ValueError(f"could not read STL file {path}")
@@ -193,13 +205,15 @@ def cross(a: Vec, b: Vec) -> Vec:
     return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
 
 
-def project(shape: TopoDS_Shape, toward_viewer: Vec, up: Vec) -> Projection:
+def project(shape: Model, toward_viewer: Vec, up: Vec) -> Projection:
     """Hidden-line projection of `shape` seen from `toward_viewer` with `up` pointing up the page.
 
     The view's x axis is up × toward_viewer, the viewer's right hand, so a right view placed to the right of the front view shows the face that is
     actually on the right (third-angle). Edges between faces meeting within SMOOTH_ANGLE_DEG are marked regular and left out, so faceted or traced
-    surfaces draw as one clean outline rather than a comb of facet lines.
+    surfaces draw as one clean outline rather than a comb of facet lines. A MeshModel is projected by mesh.project_mesh instead.
     """
+    if isinstance(shape, MeshModel):
+        return _mesh_projection(shape, toward_viewer, up)
     BRepLib.EncodeRegularity_s(shape, math.radians(SMOOTH_ANGLE_DEG))
     _keep_facet_silhouettes(shape, toward_viewer)
     x_dir = cross(up, toward_viewer)
@@ -231,6 +245,15 @@ def project(shape: TopoDS_Shape, toward_viewer: Vec, up: Vec) -> Projection:
     view.extent = (lo.X(), lo.Y(), hi.X(), hi.Y())
     log.debug("projected toward %s: %d visible, %d hidden, %d circles", toward_viewer, len(view.visible), len(view.hidden), len(view.circles))
     return view
+
+
+def _mesh_projection(mesh: MeshModel, toward_viewer: Vec, up: Vec) -> Projection:
+    """The fast path's polylines as a Projection: no circles (a mesh has none) and bounds taken from the visible polylines."""
+    visible, hidden = project_mesh(mesh, toward_viewer, up)
+    if not visible:
+        raise ValueError(f"nothing is visible looking from {toward_viewer}: the part may be empty")
+    log.debug("mesh projected toward %s: %d visible, %d hidden", toward_viewer, len(visible), len(hidden))
+    return Projection(visible, hidden, [p for p in visible if len(p) == 2])
 
 
 def _keep_facet_silhouettes(shape: TopoDS_Shape, toward_viewer: Vec) -> None:
@@ -311,13 +334,15 @@ def beyond(shape: TopoDS_Shape, origin: Vec, toward_viewer: Vec, depth: float | 
     return common.Shape()
 
 
-def section_view(shape: TopoDS_Shape, origin: Vec, toward_viewer: Vec, up: Vec, depth: float | None = None) -> Projection:
+def section_view(shape: Model, origin: Vec, toward_viewer: Vec, up: Vec, depth: float | None = None) -> Projection:
     """A section view: the material beyond the cutting plane through `origin`, seen from `toward_viewer` with `up` up the page.
 
     The cut face's outlines are attached for hatching. Hidden lines are left out, as is usual in a section view.
 
     View.draw hatches the cut face. The frame is project()'s, so cut_plane arrows drawn with sight_direction match it.
     """
+    if isinstance(shape, MeshModel):
+        raise ValueError(f"{shape.name} is a large mesh drawn by the fast path, which cannot cut sections: use a STEP file")
     t = np.array(toward_viewer, float)
     u = np.array(up, float)
     t, u = t / np.linalg.norm(t), u / np.linalg.norm(u)  # section_loops needs unit vectors; project() and beyond() accept any length
