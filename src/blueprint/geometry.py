@@ -274,8 +274,8 @@ def beyond(shape: TopoDS_Shape, origin: Vec, toward_viewer: Vec, depth: float | 
     That is what a section view looking along -toward_viewer sees once the near part is cut away. With `depth`, only material within that
     distance of the plane is kept.
     """
-    t = np.asarray(toward_viewer, float)
-    t /= np.linalg.norm(t)
+    t = np.array(toward_viewer, float)  # a copy: never normalise the caller's array in place
+    t = t / np.linalg.norm(t)
     lo, hi = (np.asarray(c) for c in bounding_box(shape))
     # A box built in the plane's frame, wider than the part from wherever the plane sits, so it keeps everything beyond the plane.
     span = 2 * (float(np.linalg.norm(hi - lo)) + float(np.linalg.norm((lo + hi) / 2 - np.asarray(origin, float)))) + SECTION_MARGIN
@@ -303,10 +303,15 @@ def section_view(shape: TopoDS_Shape, origin: Vec, toward_viewer: Vec, up: Vec, 
 
     View.draw hatches the cut face. The frame is project()'s, so cut_plane arrows drawn with sight_direction match it.
     """
-    projection = project(beyond(shape, origin, toward_viewer, depth), toward_viewer, up)
-    loops = section_loops(shape, origin, toward_viewer, cross(up, toward_viewer))
-    if not loops:
+    t = np.array(toward_viewer, float)
+    u = np.array(up, float)
+    t, u = t / np.linalg.norm(t), u / np.linalg.norm(u)  # section_loops needs unit vectors; project() and beyond() accept any length
+    toward: Vec = (float(t[0]), float(t[1]), float(t[2]))
+    up_unit: Vec = (float(u[0]), float(u[1]), float(u[2]))
+    loops = section_loops(shape, origin, toward, cross(up_unit, toward))
+    if not loops:  # checked first: a plane clear of the part on the near side would leave nothing to project
         raise ValueError(f"the plane through {origin} facing {toward_viewer} does not cut the part")
+    projection = project(beyond(shape, origin, toward, depth), toward, up_unit)
     return replace(projection, hidden=[], section=loops)
 
 

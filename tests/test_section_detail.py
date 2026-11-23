@@ -77,3 +77,56 @@ def test_detail_circle_marks_the_parent_view(block: object) -> None:
     (letter,) = [t for t in sheet.ax.texts if t.get_text() == "B"]
     lx, ly = letter.get_position()
     assert lx > 110 + 12 * 0.7 and ly > 140 + 12 * 0.7, "lettered outside the circle's upper right"
+
+
+def _distance_to_polylines(pt: np.ndarray, lines: list[np.ndarray]) -> float:
+    best = np.inf
+    for line in lines:
+        a, b = line[:-1], line[1:]
+        ab = b - a
+        k = np.clip(np.einsum("ij,ij->i", pt - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0, 1)
+        best = min(best, float(np.min(np.linalg.norm(a + ab * k[:, None] - pt, axis=1))))
+    return best
+
+
+def test_section_hatch_lands_on_the_projection_in_known_places(block: object) -> None:
+    # Seen from +X with +Y up, the view's x axis is up x toward = Y x X = -Z, so the block's depth (z 0..20) spans view x -20..0. The cut at
+    # x = 12 crosses the hole (y 9..15), leaving a strip below (y 0..9) and above (y 15..30). A mirrored or shifted hatch fails here.
+    proj = section_view(block, (12, 0, 0), (1, 0, 0), (0, 1, 0))
+    boxes = sorted((float(lp[:, 1].min()), float(lp[:, 1].max()), float(lp[:, 0].min()), float(lp[:, 0].max())) for lp in proj.section)
+    lo, hi = HOLE_CENTRE[1] - HOLE_R, HOLE_CENTRE[1] + HOLE_R
+    assert boxes == [pytest.approx((0, lo, -D, 0), abs=1e-6), pytest.approx((hi, H, -D, 0), abs=1e-6)]
+    for loop in proj.section:
+        assert max(_distance_to_polylines(pt, proj.visible) for pt in loop) < 1e-3, "every hatch outline point lies on a drawn edge"
+
+
+def test_beyond_far_origin_and_oblique_direction(block: object) -> None:
+    # The plane x = 12 described by an origin far away in y and z still keeps all of x < 12.
+    (x0, y0, z0), (x1, y1, z1) = bounding_box(beyond(block, (12, 1e4, -3e4), (1, 0, 0)))
+    assert (x0, x1, y0, y1, z0, z1) == pytest.approx((0, 12, 0, H, 0, D), abs=1e-6)
+    # Oblique: keep x + y <= 20 (viewer toward (1, 1, 0)); the kept corner nearest the origin is (0, 0) and nothing has x + y > 20.
+    kept = beyond(block, (10, 10, 0), (1, 1, 0))
+    (x0, y0, _), (x1, y1, _) = bounding_box(kept)
+    assert (x0, y0) == pytest.approx((0, 0), abs=1e-6) and x1 == pytest.approx(20, abs=1e-6) and y1 == pytest.approx(20, abs=1e-6)
+
+
+def test_direction_arrays_are_not_modified_and_need_not_be_unit(block: object) -> None:
+    toward = np.array([2.0, 0.0, 0.0])
+    beyond(block, (12, 0, 0), toward)
+    assert toward.tolist() == [2.0, 0.0, 0.0]
+    long_dirs = section_view(block, (12, 0, 0), (3, 0, 0), (0, 5, 0))
+    unit_dirs = section_view(block, (12, 0, 0), (1, 0, 0), (0, 1, 0))
+    assert long_dirs.bounds() == pytest.approx(unit_dirs.bounds())
+
+
+def test_plane_clear_of_the_near_side_is_refused_as_missing(block: object) -> None:
+    with pytest.raises(ValueError, match="does not cut the part"):
+        section_view(block, (-100, 0, 0), (1, 0, 0), (0, 1, 0))
+
+
+def test_cropped_section_clips_its_hatch(block: object) -> None:
+    sheet = Sheet("B")
+    first = len(sheet.ax.patches)
+    View.at_corner(sheet, section_view(block, (12, 0, 0), (1, 0, 0), (0, 1, 0)).cropped((-10, 5), 4), (100, 100), 3.0).draw()
+    hatches = [p for p in sheet.ax.patches[first:] if isinstance(p, PathPatch) and p.get_hatch()]
+    assert hatches and all(p.get_clip_path() is not None for p in hatches)
