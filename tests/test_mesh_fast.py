@@ -329,3 +329,85 @@ def test_ascii_parse_is_the_same_whatever_the_chunking(tmp_path: Path, monkeypat
     monkeypatch.setattr(mesh_module, "ASCII_CHUNK_BYTES", 37)
     assert np.array_equal(mesh_module.read_stl(path), whole)
     assert mesh_module.stl_triangle_count(path) == len(tris)
+
+
+# --- Second fix round: int32 overflow in the winding flood fill, ASCII detection, huge tokens ---
+
+
+def _grid(n: int) -> np.ndarray:
+    """A flat n x n grid of quads as 2 n^2 triangles, all wound the same way."""
+    xs = np.arange(n + 1, dtype=float)
+    gx, gy = np.meshgrid(xs, xs)
+    p = np.stack([gx, gy, np.zeros_like(gx)], axis=-1)
+    a, b, c, d = p[:-1, :-1], p[:-1, 1:], p[1:, 1:], p[1:, :-1]
+    return np.concatenate([np.stack([a, b, c], axis=2).reshape(-1, 3, 3), np.stack([a, c, d], axis=2).reshape(-1, 3, 3)])
+
+
+def test_winding_is_made_consistent_on_a_large_mesh() -> None:
+    """Above 46,340 faces the flood fill's edge keys overflowed int32 and left flipped faces flipped: no edge may be walked the same way twice afterwards."""
+    tris = _grid(300)  # 180,000 faces: the old int32 keys wrapped from 46,341 faces up, but only a mesh well beyond that showed it
+    flip = np.zeros(len(tris), dtype=bool)
+    flip[::997] = True
+    tris[flip] = tris[flip][:, [0, 2, 1]]
+    mesh = build_mesh(tris, "grid")
+    assert len(mesh.faces) > 100_000
+    directed = np.concatenate([mesh.faces[:, [0, 1]], mesh.faces[:, [1, 2]], mesh.faces[:, [2, 0]]])
+    keys = directed[:, 0] * len(mesh.vertices) + directed[:, 1]
+    assert len(np.unique(keys)) == len(keys), "some edge is traversed in the same direction by two faces"
+
+
+def _ascii_stl(triangles: np.ndarray, header: str = "solid part", keyword_case: str = "lower") -> str:
+    lines = [header]
+    for tri in triangles:
+        body = ["facet normal 0 0 1", " outer loop", *[f"  vertex {float(x)!r} {float(y)!r} {float(z)!r}" for x, y, z in tri], " endloop", "endfacet"]
+        lines += [k.upper() if keyword_case == "upper" else k for k in body]
+    return "\n".join([*lines, "endsolid"]) + "\n"
+
+
+@pytest.mark.parametrize("variant", ["bom", "long-name", "bom-long-name"])
+def test_ascii_stl_with_bom_or_long_solid_name_is_read_as_ascii(variant: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A UTF-8 byte-order mark or a solid name over a kilobyte once made an ASCII file read as binary: a garbage count and a misleading 'truncated'."""
+    from blueprint.mesh import read_stl, stl_triangle_count
+
+    tris = _uv_sphere(rings=8, segments=12)
+    header = "solid " + ("n" * 3000 if "long" in variant else "part")
+    data = _ascii_stl(tris, header).encode()
+    path = tmp_path / "ascii.stl"
+    path.write_bytes((b"\xef\xbb\xbf" if "bom" in variant else b"") + data)
+    assert stl_triangle_count(path) == len(tris) == len(read_stl(path))
+    monkeypatch.setattr(geometry, "MESH_MAX_TRIANGLES", 100)
+    with pytest.raises(ValueError, match="limit is 100"):
+        load_shape(path)
+
+
+def test_binary_with_a_solid_facet_header_and_padding_still_trips_the_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Many binary files start 'solid' in their free-text header; with trailing padding the size no longer matches, but it is still binary."""
+    from blueprint.mesh import read_stl
+
+    tris = _uv_sphere(rings=8, segments=12)
+    data = bytearray(_binary_stl(tris, pad=200))
+    data[:12] = b"solid facet "
+    path = tmp_path / "solid.stl"
+    path.write_bytes(bytes(data))
+    assert len(read_stl(path)) == len(tris)
+    monkeypatch.setattr(geometry, "MESH_MAX_TRIANGLES", 100)
+    with pytest.raises(ValueError, match="limit is 100"):
+        load_shape(path)
+
+
+def test_a_huge_token_in_an_ascii_file_does_not_blow_up_memory(tmp_path: Path) -> None:
+    """numpy sized every token to the longest in its chunk, so one 1 MB comment word multiplied by the token count; long tokens are now dropped."""
+    import tracemalloc
+
+    from blueprint.mesh import read_stl
+
+    tris = _uv_sphere(rings=8, segments=12)
+    text = _ascii_stl(tris, "solid " + "x" * 1_000_000)
+    path = tmp_path / "huge.stl"
+    path.write_text(text)
+    tracemalloc.start()
+    got = read_stl(path)
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    assert np.allclose(got, tris)
+    assert peak < 20_000_000, f"peak {peak:,} bytes"

@@ -16,26 +16,33 @@ ASCII_CHUNK_BYTES = 1 << 22  # an ASCII STL is parsed this much at a time, so it
 _RECORD = np.dtype([("normal", "<f4", 3), ("v", "<f4", (3, 3)), ("attr", "<u2")])
 
 
-def _looks_ascii(head: bytes) -> bool:
-    """True if the start of the file reads as ASCII STL: 'solid' then, within the first kilobyte, a 'facet' keyword (any case)."""
-    low = head[:1024].lower()
-    return low.lstrip().startswith(b"solid") and b"facet" in low
+UTF8_BOM = b"\xef\xbb\xbf"
+MAX_NUMBER_BYTES = 64  # an ASCII token longer than this is a name or a comment, not a number, and is dropped before parsing
+
+
+def _starts_solid(head: bytes) -> bool:
+    """True if the file begins with the ASCII keyword 'solid' (any case), after an optional UTF-8 byte-order mark and whitespace."""
+    return head.removeprefix(UTF8_BOM).lstrip().lower().startswith(b"solid")
 
 
 def _kind(path: Path) -> tuple[str, int]:
-    """('binary', header count) or ('ascii', 0) for an STL; a file that is neither raises ValueError.
+    """('binary', header count) or ('ascii', facets counted) for an STL; a file that is neither raises ValueError.
 
-    A binary file is exactly 84 + 50 * count bytes in the standard, but exporters pad and truncate, so any size is accepted here and the count is
-    judged against it by the callers. A file starting 'solid' with a facet keyword is ASCII unless its size matches its binary header exactly.
+    A binary file is exactly 84 + 50 * count bytes in the standard, but exporters pad and truncate, so any size is accepted and the callers judge the
+    count against it. Many binary files also begin with 'solid' in their free-text header, so that alone does not make a file ASCII: an exact size
+    match is binary, and a file starting 'solid' is ASCII only if it contains a facet record ('endfacet', any case). One that starts 'solid' but has
+    none and is long enough for a binary header is binary, so a padded, truncated or lying binary file cannot slip past the size guard.
     """
     size = path.stat().st_size
     with path.open("rb") as handle:
-        head = handle.read(max(BINARY_HEADER_BYTES, 1024))
+        head = handle.read(BINARY_HEADER_BYTES)
     count = int(np.frombuffer(head[80:84], dtype="<u4")[0]) if len(head) >= BINARY_HEADER_BYTES else -1
     if count >= 0 and size == BINARY_HEADER_BYTES + BINARY_TRIANGLE_BYTES * count:
         return "binary", count
-    if _looks_ascii(head):
-        return "ascii", 0
+    if _starts_solid(head):
+        facets = sum(chunk.lower().count(b"endfacet") for chunk in _ascii_chunks(path))
+        if facets:
+            return "ascii", facets
     if count < 0:
         raise ValueError(f"{path.name} is not an STL file: it is {size} bytes, shorter than a binary STL's {BINARY_HEADER_BYTES}-byte header")
     return "binary", count
@@ -50,7 +57,7 @@ def _ascii_chunks(path: Path) -> Iterator[bytes]:
 
 def _ascii_vertices(chunk: bytes) -> np.ndarray:
     """The vertices of one ASCII chunk as (n, 3) floats: the three numbers after every 'vertex' keyword, in any case."""
-    tokens = np.array(chunk.split())
+    tokens = np.array([t for t in chunk.split() if len(t) <= MAX_NUMBER_BYTES])  # numpy sizes every element to the longest, so a huge token must not get in
     if tokens.size == 0:
         return np.empty((0, 3))
     at = np.flatnonzero(np.char.lower(tokens) == b"vertex")
@@ -65,7 +72,7 @@ def stl_triangle_count(path: Path) -> int:
     """
     kind, count = _kind(path)
     if kind == "ascii":
-        return sum(chunk.lower().count(b"endfacet") for chunk in _ascii_chunks(path))
+        return count
     fits = max(0, path.stat().st_size - BINARY_HEADER_BYTES) // BINARY_TRIANGLE_BYTES
     return count if 0 < count <= fits else fits
 
@@ -171,8 +178,8 @@ def _inconsistent(count: int, owners: np.ndarray, pairs: np.ndarray, forward_a: 
     first_of = first_of[sizes > 1]  # a face alone has nothing to agree with
     for root in first_of.tolist():
         visited, pred = breadth_first_order(graph, root, directed=False, return_predecessors=True)
-        child = visited[1:]
-        par = pred[child]
+        child = visited[1:].astype(np.int64)  # scipy returns int32, and the keys below would overflow it above 46,340 faces
+        par = pred[child].astype(np.int64)
         parent[child] = par
         k = np.minimum(par, child) * count + np.maximum(par, child)
         step[child] = sorted_flag[np.searchsorted(sorted_keys, k)]
