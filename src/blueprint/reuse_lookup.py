@@ -65,20 +65,23 @@ def licence_for(drawing: Path) -> FileLicence:
     if not (root / "REUSE.toml").is_file():
         raise LicenceLookupError(f"{rel}: {root} has no REUSE.toml, so the drawing's licence is unknown. Add one, or set licence: in blueprint.yml")
     project = Project.from_directory(root)
-    # reuse also reads the file itself for SPDX headers, so it must exist; a first render has not written it yet. An empty placeholder has no
-    # header, which is exactly what a generated sheet carries, so the answer is the same.
-    placeholder = not drawing.exists()
+    # reuse reads the file itself as well as REUSE.toml, so the path must exist, and it must be empty: a previous render printed its © line into
+    # the sheet, and reading that back would feed it into this render, growing (and re-escaping) on every pass (#24). So the lookup always sees an
+    # empty file at the drawing's path, which leaves REUSE.toml as the only source whatever precedence its annotation uses. An existing sheet's
+    # bytes are held aside and put back.
+    existing = drawing.read_bytes() if drawing.exists() else None
     created_dirs = [d for d in reversed(drawing.parents) if not d.exists()]
     try:
-        if placeholder:
-            drawing.parent.mkdir(parents=True, exist_ok=True)
-            drawing.touch()
+        drawing.parent.mkdir(parents=True, exist_ok=True)
+        drawing.write_bytes(b"")
         infos = project.reuse_info_of(drawing)
     finally:
-        if placeholder:
+        if existing is None:
             drawing.unlink(missing_ok=True)
             for d in reversed(created_dirs):
                 d.rmdir()
+        else:
+            drawing.write_bytes(existing)
     expressions = sorted({str(e) for info in infos for e in info.spdx_expressions})
     if not expressions:
         raise LicenceLookupError(f"{rel}: no REUSE.toml annotation in {root} covers this drawing. Add its path to an [[annotations]] entry")
