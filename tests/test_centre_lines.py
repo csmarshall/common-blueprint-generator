@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 from matplotlib.lines import Line2D
 
-from blueprint import Sheet, View, project
+from blueprint import Sheet, View, project, section_view
 from blueprint.config import load
 from blueprint.layout import auto_sheet, view_directions
 from blueprint.sheet import CentreLine
@@ -122,14 +122,141 @@ def test_oblique_axis_is_clipped_to_the_outline_box(block: object) -> None:
     assert b == pytest.approx((_sheet_x(30) + k, _sheet_y(30) + k))
 
 
-def test_label_reads_cl_and_sits_past_the_end(block: object) -> None:
+def _label(sheet: Sheet, text: str) -> object:
+    (t,) = [t for t in sheet.ax.texts if t.get_text() == text]
+    return t
+
+
+def test_label_of_a_vertical_line_sits_just_inside_the_top_edge(block: object) -> None:
     toward, up = view_directions("+Z", "+Y")["FRONT"]
     sheet = Sheet("B")
     View(sheet, project(block, toward, up), ORIGIN, SCALE).centre_line((30, 0, 5), (0, 1, 0), "SOCKET AXIS")
-    (t,) = [t for t in sheet.ax.texts if t.get_text() == "CL SOCKET AXIS"]
-    x, y = t.get_position()
-    assert x == pytest.approx(_sheet_x(30))
-    assert y == pytest.approx(_sheet_y(30) + 2 * OVERRUN), "above the top end of a vertical line, clear of its overrun"
+    t = _label(sheet, "CL SOCKET AXIS")
+    x, y = t.get_position()  # type: ignore[attr-defined]
+    # The line is at view x 30, in the right half of the 0..40 box, so the label hangs to its left; the box top is view y 30.
+    assert t.get_ha() == "right" and t.get_va() == "top"  # type: ignore[attr-defined]
+    assert (x, y) == pytest.approx((_sheet_x(30) - OVERRUN, _sheet_y(30) - OVERRUN))
+
+
+def test_label_of_a_line_in_the_left_half_hangs_to_its_right(block: object) -> None:
+    toward, up = view_directions("+Z", "+Y")["FRONT"]
+    sheet = Sheet("B")
+    View(sheet, project(block, toward, up), ORIGIN, SCALE).centre_line((8, 0, 5), (0, 1, 0), "A")
+    t = _label(sheet, "CL A")
+    assert t.get_ha() == "left"  # type: ignore[attr-defined]
+    assert t.get_position() == pytest.approx((_sheet_x(8) + OVERRUN, _sheet_y(30) - OVERRUN))  # type: ignore[attr-defined]
+
+
+def test_label_of_a_horizontal_line_sits_inside_its_right_end_above_it(block: object) -> None:
+    toward, up = view_directions("+Z", "+Y")["RIGHT"]  # view (x, y) = (-Z, Y): the block's box is x -20..0, y 0..30
+    sheet = Sheet("B")
+    View(sheet, project(block, toward, up), ORIGIN, SCALE).centre_line((12, 12, 0), (0, 0, 1), "HOLE AXIS")
+    t = _label(sheet, "CL HOLE AXIS")
+    assert t.get_ha() == "right" and t.get_va() == "bottom"  # type: ignore[attr-defined]
+    assert t.get_position() == pytest.approx((_sheet_x(0) - OVERRUN, _sheet_y(12) + OVERRUN))  # type: ignore[attr-defined]
+
+
+def test_every_label_stays_inside_its_own_views_box(block: object) -> None:
+    sheet = Sheet("B")
+    layout = auto_sheet(
+        sheet,
+        block,
+        views=("FRONT", "TOP", "BOTTOM", "LEFT", "RIGHT", "BACK"),
+        centre_lines=[CentreLine("HOLE AXIS", (12, 12, 0), (0, 0, 1)), CentreLine("OFF-CENTRE", (30, 0, 5), (0, 1, 0)), CentreLine("X", (5, 7, 11), (1, 0, 0))],
+    )
+    boxes = [v.box() for v in layout.views.values()]
+    labels = [t for t in sheet.ax.texts if t.get_text().startswith("CL ")]
+    assert len(labels) >= 10
+    for t in labels:
+        x, y = t.get_position()
+        assert any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for b in boxes), f"{t.get_text()} anchor {x, y} is outside every view's outline"
+
+
+def test_non_unit_frame_gives_the_same_line(block: object) -> None:
+    sheet, ref = Sheet("B"), Sheet("B")
+    View(sheet, project(block, (0, 0, 2), (0, 3, 0)), ORIGIN, SCALE).centre_line((30, 0, 5), (0, 1, 0))
+    View(ref, project(block, (0, 0, 1), (0, 1, 0)), ORIGIN, SCALE).centre_line((30, 0, 5), (0, 1, 0))
+    assert np.allclose(sheet.ax.lines[-1].get_xydata(), ref.ax.lines[-1].get_xydata())
+    assert sheet.ax.lines[-1].get_xdata() == pytest.approx([_sheet_x(30)] * 2)  # type: ignore[arg-type]
+
+
+def test_scaled_projection_keeps_the_line_on_the_geometry(block: object) -> None:
+    sheet = Sheet("B")
+    proj = project(block, (0, 0, 1), (0, 1, 0)).scaled(2.0)  # the view is now 80 x 60 view-mm
+    View(sheet, proj, ORIGIN, 1.0).centre_line((30, 0, 5), (0, 1, 0))
+    line = sheet.ax.lines[-1]
+    assert line.get_xdata() == pytest.approx([ORIGIN[0] + 60] * 2)  # type: ignore[arg-type]
+    assert (min(line.get_ydata()), max(line.get_ydata())) == pytest.approx((ORIGIN[1] - OVERRUN, ORIGIN[1] + 60 + OVERRUN))  # type: ignore[type-var]
+
+
+def test_cropped_detail_clips_line_and_label_to_the_circle(block: object) -> None:
+    sheet = Sheet("B")
+    proj = project(block, (0, 0, 1), (0, 1, 0)).cropped((30, 15), 8.0)
+    before = len(sheet.ax.lines)
+    assert View(sheet, proj, ORIGIN, SCALE).centre_line((30, 0, 5), (0, 1, 0), "AX")
+    (line,) = sheet.ax.lines[before:]
+    text = _label(sheet, "CL AX")
+    assert line.get_clip_path() is not None
+    assert text.get_clip_path() is not None and text.get_clip_on()  # type: ignore[attr-defined]
+
+
+def test_uncropped_view_sets_no_clip_path(block: object) -> None:
+    sheet = Sheet("B")
+    View(sheet, project(block, (0, 0, 1), (0, 1, 0)), ORIGIN, SCALE).centre_line((30, 0, 5), (0, 1, 0), "AX")
+    assert sheet.ax.lines[-1].get_clip_path() is None
+
+
+def test_other_front_and_up_pair(block: object) -> None:
+    # front +X, up +Z, by hand: r = up x front = Z x X = +Y.
+    #   FRONT toward +X, up +Z:  x_dir = Z x X = +Y   so view (x, y) = ( Y,  Z)
+    #   RIGHT toward +Y, up +Z:  x_dir = Z x Y = -X   so view (x, y) = (-X,  Z)
+    #   TOP   toward +Z, up -X:  x_dir = -X x Z = +Y  so view (x, y) = ( Y, -X)
+    # An X-direction axis through (5, 7, 11) points at the front viewer; in RIGHT it is horizontal at y = Z = 11 across x = -X in -40..0;
+    # in TOP it is vertical at x = Y = 7 across y = -X in -40..0.
+    dirs = view_directions("+X", "+Z")
+    assert dirs["RIGHT"][0] == (0.0, 1.0, 0.0) or tuple(dirs["RIGHT"][0]) == (0, 1, 0)
+    results = {}
+    for name in ("FRONT", "RIGHT", "TOP"):
+        sheet = Sheet("B")
+        proj = project(block, *dirs[name])
+        before = len(sheet.ax.lines)
+        drawn = View(sheet, proj, ORIGIN, SCALE).centre_line((5, 7, 11), (1, 0, 0))
+        results[name] = (drawn, sheet.ax.lines[before:])
+    assert results["FRONT"] == (False, [])
+    (right,) = results["RIGHT"][1]
+    assert right.get_ydata() == pytest.approx([_sheet_y(11)] * 2)  # type: ignore[arg-type]
+    assert (min(right.get_xdata()), max(right.get_xdata())) == pytest.approx((_sheet_x(-40) - OVERRUN, _sheet_x(0) + OVERRUN))  # type: ignore[type-var]
+    (top,) = results["TOP"][1]
+    assert top.get_xdata() == pytest.approx([_sheet_x(7)] * 2)  # type: ignore[arg-type]
+    assert (min(top.get_ydata()), max(top.get_ydata())) == pytest.approx((_sheet_y(-40) - OVERRUN, _sheet_y(0) + OVERRUN))  # type: ignore[type-var]
+
+
+def test_section_view_places_axes_in_its_own_frame(block: object) -> None:
+    # Section at x = 12 seen from +X, up +Y: x_dir = Y x X = -Z, so view (x, y) = (-Z, Y). The material beyond the plane (x < 12) is the full
+    # 20 deep and 30 tall. A Y axis through z = 8 stands at view x = -8; a Z axis through y = 12 lies across at view y = 12 over x -20..0.
+    sheet = Sheet("B")
+    view = View(sheet, section_view(block, (12, 0, 0), (1, 0, 0), (0, 1, 0)), ORIGIN, SCALE)
+    assert view.centre_line((5, 0, 8), (0, 1, 0)) and view.centre_line((0, 12, 0), (0, 0, 1))
+    vertical, horizontal = sheet.ax.lines[-2], sheet.ax.lines[-1]
+    assert vertical.get_xdata() == pytest.approx([_sheet_x(-8)] * 2)  # type: ignore[arg-type]
+    assert (min(vertical.get_ydata()), max(vertical.get_ydata())) == pytest.approx((_sheet_y(0) - OVERRUN, _sheet_y(30) + OVERRUN))  # type: ignore[type-var]
+    assert horizontal.get_ydata() == pytest.approx([_sheet_y(12)] * 2)  # type: ignore[arg-type]
+    assert (min(horizontal.get_xdata()), max(horizontal.get_xdata())) == pytest.approx((_sheet_x(-20) - OVERRUN, _sheet_x(0) + OVERRUN))  # type: ignore[type-var]
+
+
+def test_auto_sheet_warns_about_a_centre_line_drawn_nowhere(block: object, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger="blueprint.layout"):
+        auto_sheet(
+            Sheet("B"), block, views=("FRONT",), centre_lines=[CentreLine("LOST AXIS", (12, 12, 0), (0, 0, 1)), CentreLine("MISSED", (100, 0, 0), (0, 1, 0))]
+        )
+    warned = [r.getMessage() for r in caplog.records]
+    assert any("LOST AXIS" in m for m in warned) and any("MISSED" in m for m in warned)
+
+
+def test_auto_sheet_is_quiet_when_every_centre_line_draws(block: object, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger="blueprint.layout"):
+        auto_sheet(Sheet("B"), block, centre_lines=[CentreLine("OK", (30, 0, 5), (0, 1, 0))])
+    assert caplog.records == []
 
 
 def test_bad_input_is_refused(block: object) -> None:

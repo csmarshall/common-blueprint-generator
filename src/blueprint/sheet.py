@@ -646,7 +646,7 @@ class View:
         self.sheet.text(float(at[0]), float(at[1]), letter, st.type.caption, ha="center", va="center", weight="bold")
 
     def centre_line(self, point: tuple[float, float, float], axis: tuple[float, float, float], label: str = "") -> bool:
-        """Draw the axis through model `point` along `axis` as a chain line across this view, with `CL label` past one end. True if drawn.
+        """Draw the axis through model `point` along `axis` as a chain line across this view, labelled `CL label` inside the outline. True if drawn.
 
         The point and direction go through the frame the view was projected with (x = up x toward_viewer, y = up), so the line lands where the
         part's own edges do. The line runs the full width of the view's outline and a centre mark's overrun beyond it. An axis pointing at the
@@ -661,7 +661,7 @@ class View:
         if not np.all(np.isfinite(d)) or not np.all(np.isfinite(point)) or not np.linalg.norm(d) > 0:
             raise ValueError(f"centre line {label!r}: point {point} and axis {axis} must be finite, with a direction")
         d = d / np.linalg.norm(d)
-        p2 = np.array([np.dot(point, x_dir), np.dot(point, up)])
+        p2 = np.array([np.dot(point, x_dir), np.dot(point, up)]) * self.proj.unit
         d2 = np.array([np.dot(d, x_dir), np.dot(d, up)])
         if float(np.hypot(*d2)) < MIN_AXIS_SHARE:
             log.debug("centre line %r points at the viewer: not drawn", label)
@@ -678,26 +678,28 @@ class View:
         if not lo < hi:
             return False
         st = self.sheet.style
-        a, b = self.to_sheet(p2 + lo * d2)[0], self.to_sheet(p2 + hi * d2)[0]
-        run = (b - a) / float(np.hypot(*(b - a)))
-        a, b = a - run * st.spacing.centre_overrun, b + run * st.spacing.centre_overrun
+        gap = st.spacing.centre_overrun
+        ends = self.to_sheet(p2 + lo * d2)[0], self.to_sheet(p2 + hi * d2)[0]  # where the line meets the outline's box
+        run = (ends[1] - ends[0]) / float(np.hypot(*(ends[1] - ends[0])))
+        a, b = ends[0] - run * gap, ends[1] + run * gap
+        first_line, first_text = len(self.sheet.ax.lines), len(self.sheet.ax.texts)
         self.sheet.centre_line((float(a[0]), float(a[1])), (float(b[0]), float(b[1])))
         if label:
-            # The label goes past the upper end of a line that is nearer vertical, and the right end of one that is nearer horizontal.
-            vertical = abs(run[1]) > abs(run[0])
-            axis_of = 1 if vertical else 0
-            end, other = (b, a) if b[axis_of] >= a[axis_of] else (a, b)
-            out = (end - other) / float(np.hypot(*(end - other)))
-            at = end + out * st.spacing.centre_overrun
-            self.sheet.text(
-                float(at[0]),
-                float(at[1]),
-                f"CL {label}",
-                st.type.dim,
-                st.palette.dim,
-                ha="center" if vertical else "left",
-                va="bottom" if vertical else "center",
-            )
+            # The label stays inside the outline's box, so it never reaches a neighbouring view's dimension or caption. A line that is nearer
+            # vertical gets it just under its top end, on the side of the line with more room; a nearer-horizontal one just inside its right end, above it.
+            x0s, _, x1s, _ = self.box()
+            if abs(run[1]) > abs(run[0]):
+                top = ends[1] if ends[1][1] >= ends[0][1] else ends[0]
+                right_half = top[0] > (x0s + x1s) / 2
+                at, ha, va = (top[0] + (-gap if right_half else gap), top[1] - gap), ("right" if right_half else "left"), "top"
+            else:
+                right = ends[1] if ends[1][0] >= ends[0][0] else ends[0]
+                at, ha, va = (right[0] - gap, right[1] + gap), "right", "bottom"
+            self.sheet.text(float(at[0]), float(at[1]), f"CL {label}", st.type.dim, st.palette.dim, ha=ha, va=va)
+        texts = self.sheet.ax.texts[first_text:]
+        for t in texts:
+            t.set_clip_on(True)  # text is unclipped by default; a detail's crop circle has to cut the label as it cuts the line
+        self._clip(self.sheet.ax.lines[first_line:], texts)
         return True
 
     def dim_h(self, x0: float, x1: float, y_ref: float, offset: float, text: str | None = None, ext: bool = True) -> None:

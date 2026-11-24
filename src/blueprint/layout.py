@@ -96,7 +96,8 @@ def auto_sheet(
     left and right beside the centre column, back at the far right) whether or not the front view is among them; one view on its own is centred and
     drawn as large as a standard scale allows (the isometric alone is scaled to fill the space). `iso_size` sets the isometric's scale as a multiple
     of the main scale when it sits beside other views; None makes it fill the space to their right. `centre_lines` are drawn on every orthographic
-    view where their axis projects to a line (the isometric is not to scale and carries no centre marks, so none there).
+    view where their axis projects to a line (the isometric is not to scale and carries no centre marks, so none there); one that draws in no
+    view is logged as a warning naming its label.
     """
     captions = {k.upper(): v for k, v in (captions or {}).items()}
     views = tuple(dict.fromkeys(v.upper() for v in views))  # drop repeats, keep order
@@ -113,13 +114,22 @@ def auto_sheet(
     area = (x0 + left, band_top + below, x1 - CLEARANCE, y1 - CLEARANCE)
     rev = sheet.rev_block_box(REV_ROWS_RESERVED)
     if len(views) == 1:
-        return _single(sheet, views[0], proj[views[0]], (area[0], area[1], area[2], rev[1] - CLEARANCE), captions, centre_lines)
-    return _grid(sheet, proj, area, rev, captions, iso_size, centre_lines)
+        layout = _single(sheet, views[0], proj[views[0]], (area[0], area[1], area[2], rev[1] - CLEARANCE), captions)
+    else:
+        layout = _grid(sheet, proj, area, rev, captions, iso_size)
+    _centre_lines(layout, centre_lines)
+    return layout
 
 
-def _single(
-    sheet: Sheet, name: str, projection: Projection, area: tuple[float, float, float, float], captions: dict[str, str], centre_lines: Sequence[CentreLine] = ()
-) -> AutoLayout:
+def _centre_lines(layout: AutoLayout, centre_lines: Sequence[CentreLine]) -> None:
+    """Draw each centre line on every orthographic view it projects to a line in, warning about any that appear nowhere."""
+    for c in centre_lines:
+        drawn = [name for name, v in layout.views.items() if name != "ISOMETRIC" and v.centre_line(c.point, c.axis, c.label)]
+        if not drawn:
+            log.warning("centre line %r is drawn in no view: it points at every view chosen, or lies outside their outlines", c.label)
+
+
+def _single(sheet: Sheet, name: str, projection: Projection, area: tuple[float, float, float, float], captions: dict[str, str]) -> AutoLayout:
     """One view, centred in `area` (already clear of every annotation and the revision block)."""
     pw, ph = view_size(projection)
     aw, ah = area[2] - area[0], area[3] - area[1]
@@ -131,28 +141,18 @@ def _single(
             raise ValueError(f"{name} view does not fit the sheet at any standard scale: use a larger sheet size")
         s = fitting[0]
     corner = (area[0] + (aw - s * pw) / 2, area[1] + (ah - s * ph) / 2)
-    v = _draw(sheet, name, projection, corner, s, captions, centre_lines)
+    v = _draw(sheet, name, projection, corner, s, captions)
     log.info("single %s view at scale %.2f", name, s)
     return AutoLayout(s, s, {name: v})
 
 
-def _draw(
-    sheet: Sheet,
-    name: str,
-    projection: Projection,
-    corner: tuple[float, float],
-    scale: float,
-    captions: dict[str, str],
-    centre_lines: Sequence[CentreLine] = (),
-) -> View:
+def _draw(sheet: Sheet, name: str, projection: Projection, corner: tuple[float, float], scale: float, captions: dict[str, str]) -> View:
     """Place, draw and annotate one view."""
     is_iso = name == "ISOMETRIC"
     v = View.at_corner(sheet, projection, corner, scale).draw(hidden=not is_iso, centre_marks=not is_iso)
     if is_iso:
         v.caption("ISOMETRIC", "not to scale", below=sheet.style.spacing.caption_drop)
     else:
-        for c in centre_lines:
-            v.centre_line(c.point, c.axis, c.label)
         v.overall_dims()
         v.caption(name, captions.get(name, ""))
     return v
@@ -169,7 +169,6 @@ def _grid(
     rev: tuple[float, float, float, float],
     captions: dict[str, str],
     iso_size: float | None,
-    centre_lines: Sequence[CentreLine] = (),
 ) -> AutoLayout:
     """Orthographic views on the third-angle grid, and the isometric (if chosen) in the space to their right."""
     gap = sheet.style.spacing.view_gap
@@ -228,7 +227,7 @@ def _grid(
         c, r = CELLS[name]
         w, h = size[name]
         corner = (col_x[c] + (s * col_w[c] - s * w) / 2, row_y[r] + (s * row_h[r] - s * h) / 2)
-        placed[name] = _draw(sheet, name, proj[name], corner, s, captions, centre_lines)
+        placed[name] = _draw(sheet, name, proj[name], corner, s, captions)
     if has_iso:
         iw, ih = size["ISOMETRIC"]
         iso_left = left_edge + grid_w + gap
