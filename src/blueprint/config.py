@@ -36,7 +36,12 @@ class Key:
 
 KEYS: tuple[Key, ...] = (
     Key(
-        "model", "path", "required", "The part to draw: a STEP file (`.step`, `.stp`), or an STL as a fallback (curves then draw as facets).", "build/dock.step"
+        "model",
+        "path",
+        "required",
+        "The part to draw: a STEP file (`.step`, `.stp`), or an STL as a fallback (curves then draw as facets; an STL over 100,000 triangles"
+        " takes a fast mesh path, up to 1,000,000 triangles, with no sections; see the README).",
+        "build/dock.step",
     ),
     Key("output", "path", "required", "Where to write the sheet, without an extension; one file per entry in `formats`.", "docs/images/blueprint_dock"),
     Key("title", "text", "required", "The drawing title, in the title block's top row.", "U1 TAG CLIP · FINGER DOCK"),

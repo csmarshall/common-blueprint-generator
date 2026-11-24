@@ -17,7 +17,7 @@ from typing import Any
 
 from OCP.TopoDS import TopoDS_Shape
 
-from .geometry import load_shape, project
+from .geometry import Model, load_shape, project
 from .layout import ALL_VIEWS, view_directions, view_size
 from .readme import PREVIEW, embed, update
 from .sheet import TEXT_HEIGHT_EM, Canvas, View
@@ -41,7 +41,7 @@ class PreviewLayout:
     path: Path
 
 
-def as_shape(model: Any) -> TopoDS_Shape:
+def as_shape(model: Any) -> Model:
     """An OCP shape from a file path, an OCP shape, a build123d or cadquery Shape (`.wrapped`), or a cadquery Workplane (`.toOCC()`)."""
     if isinstance(model, TopoDS_Shape):
         return model

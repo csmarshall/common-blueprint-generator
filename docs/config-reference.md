@@ -6,7 +6,7 @@ One `blueprint.yml` per drawing. Paths are relative to the file. Unknown keys ar
 
 | Key | Type | Default | Meaning | Example |
 |---|---|---|---|---|
-| `model` | path | required | The part to draw: a STEP file (`.step`, `.stp`), or an STL as a fallback (curves then draw as facets). | `model: build/dock.step` |
+| `model` | path | required | The part to draw: a STEP file (`.step`, `.stp`), or an STL as a fallback (curves then draw as facets; an STL over 100,000 triangles takes a fast mesh path, up to 1,000,000 triangles, with no sections; see the README). | `model: build/dock.step` |
 | `output` | path | required | Where to write the sheet, without an extension; one file per entry in `formats`. | `output: docs/images/blueprint_dock` |
 | `title` | text | required | The drawing title, in the title block's top row. | `title: U1 TAG CLIP · FINGER DOCK` |
 | `drawing_number` | text | "" | DWG NO. field. | `drawing_number: STC-001` |
