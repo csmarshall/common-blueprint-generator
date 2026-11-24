@@ -51,7 +51,7 @@ def test_local_repo_drops_the_claim(tmp_path: Path, workflow: str | None) -> Non
     assert not renders_in_ci(readme)
     text = embed(readme, readme.parent / "a.svg", "A", "a.step")
     assert CLAIM not in text
-    assert "by [common-blueprint-generator](https://github.com/csmarshall/common-blueprint-generator) · [Buy me a coffee]" in text
+    assert text.endswith("by [common-blueprint-generator](https://github.com/csmarshall/common-blueprint-generator)</sub>")
 
 
 def test_worktree_git_file_and_yaml_extension(tmp_path: Path) -> None:
