@@ -117,3 +117,38 @@ def test_preview_path_must_be_licensed_too(tmp_path: Path, block_step: Path) -> 
     (repo / "part" / "drawing.svg").unlink()
     assert main(["render", str(_cfg(repo, "preview: true\n"))]) == 1
     assert not (repo / "part" / "drawing.svg").exists(), "an unlicensed preview fails before anything is written"
+
+
+AGGREGATE = """version = 1
+
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 Charles Marshall", "Upstream Author <https://example.com/model>"]
+SPDX-License-Identifier = "CC-BY-NC-SA-4.0"
+"""
+
+
+@pytest.mark.parametrize("toml", [AGGREGATE, AGGREGATE.replace('precedence = "aggregate"\n', ""), SPLIT])
+def test_rerender_does_not_read_the_previous_sheets_own_copyright(tmp_path: Path, block_step: Path, toml: str) -> None:
+    """#24: the sheet carries its © line; a re-render must not feed it back through reuse, or the notice grows and the SVG never settles."""
+    repo = _repo(tmp_path, toml, block_step)
+    cfg = _cfg(repo)
+    svg = repo / "part" / "drawing.svg"
+    assert main(["render", str(cfg)]) == 0
+    first = svg.read_bytes()
+    expected = licence_for(svg).copyright
+    assert main(["render", str(cfg)]) == 0
+    assert svg.read_bytes() == first, "a re-render with nothing changed is byte-identical"
+    assert licence_for(svg).copyright == expected
+    assert expected.count("Charles Marshall") == 1 and "&amp;" not in expected
+
+
+def test_lookup_ignores_and_keeps_existing_file_contents(tmp_path: Path, block_step: Path) -> None:
+    repo = _repo(tmp_path, AGGREGATE, block_step)
+    sheet = repo / "part" / "drawing.svg"
+    sheet.write_text("<!-- SPDX-FileCopyrightText: 1999 Stale Holder -->\n<svg/>\n")
+    before = sheet.read_bytes()
+    found = licence_for(sheet)
+    assert "Stale Holder" not in found.copyright and found.copyright.count("Charles Marshall") == 1
+    assert sheet.read_bytes() == before, "the existing sheet is restored untouched"
