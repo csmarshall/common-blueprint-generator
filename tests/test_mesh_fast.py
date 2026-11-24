@@ -157,3 +157,175 @@ def test_large_stl_loads_as_mesh_and_draws_a_sheet(block_stl: Path, monkeypatch:
 def test_small_stl_keeps_the_occ_path(block_stl: Path) -> None:
     """At the default threshold a small STL still goes through sewing, so existing sheets render as before."""
     assert not isinstance(load_shape(block_stl), MeshModel)
+
+
+# --- Fix round: guard bypasses, padding occluders, winding ---
+
+
+def _scene_boxes(offset: float = 0.0, seed: int = 0) -> np.ndarray:
+    """A few overlapping random boxes, shifted by `offset` along z. The triangle count (12 per box) leaves the last BVH leaf partly filled."""
+    rng = np.random.default_rng(seed)
+    boxes = []
+    for _ in range(int(rng.integers(2, 9))):
+        lo = rng.uniform(0, 40, 3)
+        boxes.append(_box(tuple(lo + [0, 0, offset]), tuple(lo + rng.uniform(3, 15, 3) + [0, 0, offset])))
+    return np.concatenate(boxes)
+
+
+def _length(lines: list[np.ndarray]) -> float:
+    return float(sum(np.linalg.norm(np.diff(p, axis=0), axis=1).sum() for p in lines))
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_projection_does_not_depend_on_where_the_part_sits_along_the_view(seed: int) -> None:
+    """Moving a scene toward or away from the viewer changes no drawn length: padding in a partly filled BVH leaf once occluded rays at negative depth."""
+    results = []
+    for offset in (-200.0, 0.0, 200.0):
+        view = geometry._mesh_projection(build_mesh(_scene_boxes(offset, seed), "boxes"), (0.3, 0.5, 1), (0, 1, 0))
+        results.append((_length(view.visible), _length(view.hidden)))
+    assert results[0] == pytest.approx(results[1], abs=1e-6)
+    assert results[2] == pytest.approx(results[1], abs=1e-6)
+
+
+def test_bvh_matches_brute_force_over_several_levels() -> None:
+    """A BVH of 997 triangles (7 levels, last leaf partly filled) answers random rays, at negative depth, as testing every triangle does."""
+    from blueprint.mesh import _Bvh
+
+    rng = np.random.default_rng(3)
+    verts = rng.uniform(-50, 50, (2991, 3))
+    faces = np.arange(2991).reshape(-1, 3)
+    verts[:, 2] = rng.uniform(-80, -20, len(verts))  # all behind the origin, so a padding triangle at depth 0 would wrongly look nearer than every ray
+    verts[:, :2] *= 0.2  # small triangles in the view plane, so most rays hit few of them
+    xy, depth = verts[:, :2], verts[:, 2]
+    bvh = _Bvh(xy, depth, faces, 1e-9)
+    q = xy[faces[rng.integers(0, len(faces), 400)]].mean(axis=1) + rng.normal(0, 0.05, (400, 2))  # rays that land on triangles, last leaf included
+    q[-60:] = xy[faces[-60:]].mean(axis=1)  # the last triangles, which share the partly filled leaf
+    d = rng.uniform(-80, -10, 400)
+    expected = np.zeros(400, dtype=bool)
+    for tri in faces:
+        a, b, c = xy[tri]
+        for i in range(400):
+            p = q[i]
+
+            def side(u: np.ndarray, v: np.ndarray, w: np.ndarray) -> float:
+                return float((v[0] - u[0]) * (w[1] - u[1]) - (v[1] - u[1]) * (w[0] - u[0]))
+
+            s = [side(a, b, p), side(b, c, p), side(c, a, p)]
+            if not (all(x >= -1e-9 for x in s) or all(x <= 1e-9 for x in s)):
+                continue
+            area = side(a, b, c)
+            if abs(area) < 1e-12:
+                continue
+            w = np.array([s[1], s[2], s[0]]) / area
+            if (w * depth[tri]).sum() > d[i]:
+                expected[i] = True
+    assert expected.sum() > 20 and (~expected).sum() > 20  # both answers are exercised
+    assert np.array_equal(bvh.occluded(q, d), expected)
+
+
+def _uv_sphere(radius: float = 10.0, rings: int = 24, segments: int = 48) -> np.ndarray:
+    """Outward-wound UV sphere triangles, smooth enough (7.5 degrees a step) that no crease is sharper than the 20 degree limit."""
+    tris = []
+    for i in range(rings):
+        t0, t1 = np.pi * i / rings, np.pi * (i + 1) / rings
+        for j in range(segments):
+            p0, p1 = 2 * np.pi * j / segments, 2 * np.pi * (j + 1) / segments
+
+            def pt(t: float, p: float) -> list[float]:
+                return [radius * np.sin(t) * np.cos(p), radius * np.sin(t) * np.sin(p), radius * np.cos(t)]
+
+            a, b, c, d = pt(t0, p0), pt(t0, p1), pt(t1, p1), pt(t1, p0)
+            if i > 0:
+                tris.append([a, d, b])
+            if i < rings - 1:
+                tris.append([b, d, c])
+    return np.array(tris, float)
+
+
+@pytest.mark.parametrize("fraction", [0.0, 0.01, 0.2, 1.0])
+def test_inconsistent_winding_draws_the_same_sphere(fraction: float) -> None:
+    """Faces wound the wrong way (a 1% scatter, a fifth, or the whole sphere inside out) must not add false creases or silhouettes."""
+    tris = _uv_sphere()
+    good = geometry._mesh_projection(build_mesh(tris, "good"), (0, 0, 1), (0, 1, 0))
+    flipped = tris.copy()
+    pick = np.random.default_rng(1).random(len(flipped)) < fraction
+    if fraction == 1.0:
+        pick[:] = True
+    flipped[pick] = flipped[pick][:, [0, 2, 1]]
+    bad = geometry._mesh_projection(build_mesh(flipped, "bad"), (0, 0, 1), (0, 1, 0))
+    assert _length(bad.visible) == pytest.approx(_length(good.visible), rel=1e-6)
+    assert _length(bad.hidden) == pytest.approx(_length(good.hidden), rel=1e-6)
+    assert len(bad.visible) == len(good.visible)
+
+
+def _binary_stl(triangles: np.ndarray, count: int | None = None, pad: int = 0, cut: int = 0) -> bytes:
+    record = np.zeros(len(triangles), dtype=[("normal", "<f4", 3), ("v", "<f4", (3, 3)), ("attr", "<u2")])
+    record["v"] = triangles
+    data = b"\0" * 80 + np.uint32(len(triangles) if count is None else count).tobytes() + record.tobytes() + b"\0" * pad
+    return data[: len(data) - cut]
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        pytest.param(lambda t: _binary_stl(t), id="exact"),
+        pytest.param(lambda t: _binary_stl(t, pad=1), id="one-trailing-byte"),
+        pytest.param(lambda t: _binary_stl(t, pad=300), id="padded"),
+        pytest.param(lambda t: _binary_stl(t, cut=10), id="truncated"),
+        pytest.param(lambda t: _binary_stl(t, count=0), id="header-count-zero"),
+        pytest.param(lambda t: _binary_stl(t, count=0xFFFFFFFF), id="header-count-huge"),
+    ],
+)
+def test_size_guard_cannot_be_bypassed_by_binary_quirks(make, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
+    """Padding, truncation and a lying header count all still trip the guard; none may fall through to OCC sewing, which is the hang."""
+    tris = _uv_sphere(rings=8, segments=12)  # 168 triangles
+    path = tmp_path / "part.stl"
+    path.write_bytes(make(tris))
+    monkeypatch.setattr(geometry, "MESH_MAX_TRIANGLES", 100)
+    with pytest.raises(ValueError, match=r"part\.stl has [\d,]+ triangles.*limit is 100"):
+        load_shape(path)
+
+
+def test_size_guard_counts_uppercase_ascii(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lines = ["SOLID part"]
+    for tri in _uv_sphere(rings=8, segments=12):
+        lines += ["FACET NORMAL 0 0 1", " OUTER LOOP", *[f"  VERTEX {x} {y} {z}" for x, y, z in tri], " ENDLOOP", "ENDFACET"]
+    path = tmp_path / "upper.stl"
+    path.write_text("\n".join([*lines, "ENDSOLID part"]))
+    from blueprint.mesh import read_stl, stl_triangle_count
+
+    assert stl_triangle_count(path) == 168 == len(read_stl(path))
+    monkeypatch.setattr(geometry, "MESH_MAX_TRIANGLES", 100)
+    with pytest.raises(ValueError, match="limit is 100"):
+        load_shape(path)
+
+
+def test_damaged_stl_is_named_not_silently_empty(tmp_path: Path) -> None:
+    from blueprint.mesh import read_stl
+
+    tris = _uv_sphere(rings=8, segments=12)
+    cut = tmp_path / "cut.stl"
+    cut.write_bytes(_binary_stl(tris, cut=10))
+    with pytest.raises(ValueError, match="truncated"):
+        read_stl(cut)
+    tiny = tmp_path / "tiny.stl"
+    tiny.write_bytes(b"solid\n")
+    with pytest.raises(ValueError, match="not an STL"):
+        read_stl(tiny)
+
+
+def test_ascii_parse_is_the_same_whatever_the_chunking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ASCII STL is parsed in chunks to bound memory; tiny chunks (cutting mid-line and mid-number) must give the same triangles as one chunk."""
+    import blueprint.mesh as mesh_module
+
+    tris = _uv_sphere(rings=8, segments=12)
+    lines = ["solid s"]
+    for tri in tris:
+        lines += ["facet normal 0 0 1", " outer loop", *[f"  vertex {float(x)!r} {float(y)!r} {float(z)!r}" for x, y, z in tri], " endloop", "endfacet"]
+    path = tmp_path / "chunky.stl"
+    path.write_text("\n".join([*lines, "endsolid s"]))
+    whole = mesh_module.read_stl(path)
+    assert np.allclose(whole, tris)
+    monkeypatch.setattr(mesh_module, "ASCII_CHUNK_BYTES", 37)
+    assert np.array_equal(mesh_module.read_stl(path), whole)
+    assert mesh_module.stl_triangle_count(path) == len(tris)

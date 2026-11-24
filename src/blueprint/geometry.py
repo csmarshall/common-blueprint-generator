@@ -50,7 +50,7 @@ MESH_SEW_TOL = 1e-4  # mm; STL vertices shared by two triangles are written iden
 # 16 s to sew and about 5.5 s a view, which is fine, while a 326k-triangle one did not finish sewing in 10 minutes. The OCC path is kept below the line
 # because it is the one validated against exact STEP output and it must keep rendering existing sheets byte for byte.
 MESH_FAST_MIN_TRIANGLES = 100_000
-MESH_MAX_TRIANGLES = 5_000_000  # beyond this even the fast path needs too much memory and time: decimate first
+MESH_MAX_TRIANGLES = 1_000_000  # beyond this even the fast path needs several GB: decimate first
 MESH_COPLANAR_DEG = 0.05  # triangles whose normals differ by less than this are one flat face
 
 # TopoDS's downcast is Edge_s in OCP 7.9 (cadquery) and Edge in OCP 8 (build123d); the package has to run under both.

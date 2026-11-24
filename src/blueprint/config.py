@@ -40,7 +40,7 @@ KEYS: tuple[Key, ...] = (
         "path",
         "required",
         "The part to draw: a STEP file (`.step`, `.stp`), or an STL as a fallback (curves then draw as facets; an STL over 100,000 triangles"
-        " takes a fast numpy path and cannot be sectioned).",
+        " takes a fast mesh path, up to 1,000,000 triangles, with no sections; see the README).",
         "build/dock.step",
     ),
     Key("output", "path", "required", "Where to write the sheet, without an extension; one file per entry in `formats`.", "docs/images/blueprint_dock"),

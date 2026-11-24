@@ -2,48 +2,88 @@
 
 from __future__ import annotations
 
-import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import breadth_first_order, connected_components
 
 BINARY_HEADER_BYTES = 84  # 80 header + uint32 triangle count
 BINARY_TRIANGLE_BYTES = 50  # normal, three vertices (12 floats) + uint16 attribute
-_VERTEX = re.compile(rb"vertex\s+(\S+)\s+(\S+)\s+(\S+)")
+ASCII_CHUNK_BYTES = 1 << 22  # an ASCII STL is parsed this much at a time, so its text is never all in memory at once
+_RECORD = np.dtype([("normal", "<f4", 3), ("v", "<f4", (3, 3)), ("attr", "<u2")])
 
 
-def _is_binary(data: bytes | memoryview) -> bool:
-    """A binary STL's size is exactly 84 + 50 * its declared count; an ASCII STL practically never matches that."""
-    if len(data) < BINARY_HEADER_BYTES:
-        return False
-    count = int(np.frombuffer(data[80:84], dtype="<u4")[0])
-    return len(data) == BINARY_HEADER_BYTES + BINARY_TRIANGLE_BYTES * count
+def _looks_ascii(head: bytes) -> bool:
+    """True if the start of the file reads as ASCII STL: 'solid' then, within the first kilobyte, a 'facet' keyword (any case)."""
+    low = head[:1024].lower()
+    return low.lstrip().startswith(b"solid") and b"facet" in low
+
+
+def _kind(path: Path) -> tuple[str, int]:
+    """('binary', header count) or ('ascii', 0) for an STL; a file that is neither raises ValueError.
+
+    A binary file is exactly 84 + 50 * count bytes in the standard, but exporters pad and truncate, so any size is accepted here and the count is
+    judged against it by the callers. A file starting 'solid' with a facet keyword is ASCII unless its size matches its binary header exactly.
+    """
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        head = handle.read(max(BINARY_HEADER_BYTES, 1024))
+    count = int(np.frombuffer(head[80:84], dtype="<u4")[0]) if len(head) >= BINARY_HEADER_BYTES else -1
+    if count >= 0 and size == BINARY_HEADER_BYTES + BINARY_TRIANGLE_BYTES * count:
+        return "binary", count
+    if _looks_ascii(head):
+        return "ascii", 0
+    if count < 0:
+        raise ValueError(f"{path.name} is not an STL file: it is {size} bytes, shorter than a binary STL's {BINARY_HEADER_BYTES}-byte header")
+    return "binary", count
+
+
+def _ascii_chunks(path: Path) -> Iterator[bytes]:
+    """The text of an ASCII STL in chunks of about ASCII_CHUNK_BYTES, each ending at a line break."""
+    with path.open("rb") as handle:
+        while chunk := handle.read(ASCII_CHUNK_BYTES):
+            yield chunk + handle.readline()
+
+
+def _ascii_vertices(chunk: bytes) -> np.ndarray:
+    """The vertices of one ASCII chunk as (n, 3) floats: the three numbers after every 'vertex' keyword, in any case."""
+    tokens = np.array(chunk.split())
+    if tokens.size == 0:
+        return np.empty((0, 3))
+    at = np.flatnonzero(np.char.lower(tokens) == b"vertex")
+    at = at[at + 3 < tokens.size]
+    return np.asarray(tokens[at[:, None] + np.arange(1, 4)].astype(np.float64))
 
 
 def stl_triangle_count(path: Path) -> int:
-    """Number of triangles in an STL, read from the header (binary) or by counting facets (ASCII), without parsing the vertices."""
-    with path.open("rb") as handle:
-        head = handle.read(BINARY_HEADER_BYTES)
-        size = path.stat().st_size
-        if len(head) == BINARY_HEADER_BYTES:
-            count = int(np.frombuffer(head[80:84], dtype="<u4")[0])
-            if size == BINARY_HEADER_BYTES + BINARY_TRIANGLE_BYTES * count:
-                return count
-        return path.read_bytes().count(b"endfacet")
+    """An upper bound on the triangles in an STL, without parsing the vertices: the header count (binary), or the facets counted (ASCII).
+
+    A binary header count of 0, or one larger than the file can hold, is not trusted: the bound is then what the file's size allows.
+    """
+    kind, count = _kind(path)
+    if kind == "ascii":
+        return sum(chunk.lower().count(b"endfacet") for chunk in _ascii_chunks(path))
+    fits = max(0, path.stat().st_size - BINARY_HEADER_BYTES) // BINARY_TRIANGLE_BYTES
+    return count if 0 < count <= fits else fits
 
 
 def read_stl(path: Path) -> np.ndarray:
     """The triangles of an STL (binary or ASCII) as an (n, 3, 3) float64 array of vertex coordinates."""
-    data = path.read_bytes()
-    if _is_binary(data):
-        count = int(np.frombuffer(data[80:84], dtype="<u4")[0])
-        record = np.dtype([("normal", "<f4", 3), ("v", "<f4", (3, 3)), ("attr", "<u2")])
-        return np.frombuffer(data, dtype=record, count=count, offset=BINARY_HEADER_BYTES)["v"].astype(np.float64)
-    found = _VERTEX.findall(data)
-    if not found or len(found) % 3:
-        raise ValueError(f"could not read STL file {path}: no triangles found")
-    return np.array(found, dtype=np.float64).reshape(-1, 3, 3)
+    kind, count = _kind(path)
+    if kind == "binary":
+        fits = max(0, path.stat().st_size - BINARY_HEADER_BYTES) // BINARY_TRIANGLE_BYTES
+        if count > fits:
+            raise ValueError(f"could not read STL file {path.name}: truncated, its header promises {count:,} triangles but the file holds {fits:,}")
+        if count == 0:
+            raise ValueError(f"could not read STL file {path.name}: no triangles found")
+        return np.fromfile(path, dtype=_RECORD, count=count, offset=BINARY_HEADER_BYTES)["v"].astype(np.float64)
+    found = [v for chunk in _ascii_chunks(path) if len(v := _ascii_vertices(chunk))]
+    if not found or sum(len(v) for v in found) % 3:
+        raise ValueError(f"could not read STL file {path.name}: no triangles found")
+    return np.concatenate(found).reshape(-1, 3, 3)
 
 
 # --- The mesh fast path: feature and silhouette edges from the triangles, visibility by ray tests against a BVH, no OCC. ---
@@ -55,7 +95,7 @@ MESH_VIS_STEPS = 400  # an edge is tested every (model diagonal / this) along it
 MESH_BISECT_STEPS = 8  # halvings used to locate where an edge goes behind something: accurate to a 256th of the sample spacing
 MESH_DEPTH_EPS = 1e-5  # of the model diagonal: how far toward the viewer a ray starts, so a surface never occludes the edges lying on it
 MESH_LEAF = 8  # triangles per BVH leaf
-MESH_QUERY_CHUNK = 20_000  # ray queries traversed at once, which bounds the memory of the frontier
+MESH_QUERY_CHUNK = 500  # ray queries traversed at once, which bounds the memory of the frontier
 
 
 @dataclass(frozen=True)
@@ -84,24 +124,67 @@ def build_mesh(triangles: np.ndarray, name: str) -> MeshModel:
     cross_n = np.cross(vertices[faces[:, 1]] - vertices[faces[:, 0]], vertices[faces[:, 2]] - vertices[faces[:, 0]])
     area2 = np.linalg.norm(cross_n, axis=1)
     keep = area2 > 0
-    faces, cross_n, area2 = faces[keep], cross_n[keep], area2[keep]
+    faces = faces[keep]
     if len(faces) == 0:
         raise ValueError(f"{name} contains no geometry")
-    normals = cross_n / area2[:, None]
     half = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
     face_of = np.tile(np.arange(len(faces)), 3)
+    forward = half[:, 0] < half[:, 1]  # which way round its face a half-edge runs, relative to the edge's sorted vertex order
     lo, hi = half.min(axis=1), half.max(axis=1)
     key = lo * len(vertices) + hi
     order = np.argsort(key, kind="stable")
-    key, face_of, lo, hi = key[order], face_of[order], lo[order], hi[order]
+    key, face_of, lo, hi, forward = key[order], face_of[order], lo[order], hi[order], forward[order]
     starts = np.flatnonzero(np.r_[True, key[1:] != key[:-1]])
     counts = np.diff(np.r_[starts, len(key)])
     owners = np.full((len(starts), 2), -1, dtype=np.int64)
     owners[:, 0] = face_of[starts]
     two = counts >= 2
     owners[two, 1] = face_of[starts[two] + 1]
+    flip = _inconsistent(len(faces), owners, two & (counts == 2), forward[starts], forward[np.minimum(starts + 1, len(forward) - 1)])
+    faces[flip] = faces[flip][:, [0, 2, 1]]
+    cross_n = np.cross(vertices[faces[:, 1]] - vertices[faces[:, 0]], vertices[faces[:, 2]] - vertices[faces[:, 0]])
+    normals = cross_n / np.linalg.norm(cross_n, axis=1)[:, None]
     box = vertices.max(axis=0) - vertices.min(axis=0)
     return MeshModel(name, vertices, faces, normals, np.column_stack([lo[starts], hi[starts]]), owners, counts > 2, float(np.linalg.norm(box)))
+
+
+def _inconsistent(count: int, owners: np.ndarray, pairs: np.ndarray, forward_a: np.ndarray, forward_b: np.ndarray) -> np.ndarray:
+    """The faces to reverse so that neighbouring faces agree on which way is out, as a boolean mask.
+
+    Two faces sharing an edge are wound consistently when they run along it in opposite directions. Each connected component of faces (joined across
+    two-face edges) is flooded from one face; a face is reversed if an odd number of disagreeing edges lie on its path from that face. Whether a
+    component as a whole faces inward does not matter here: silhouettes need only that neighbours agree, and visibility never uses the normals.
+    """
+    a, b = owners[pairs, 0], owners[pairs, 1]
+    disagree = (forward_a == forward_b)[pairs]
+    if not disagree.any():
+        return np.zeros(count, dtype=bool)
+    graph = coo_matrix((np.ones(len(a), dtype=np.int8), (a, b)), shape=(count, count)).tocsr()
+    _, labels = connected_components(graph, directed=False)
+    lo_f, hi_f = np.minimum(a, b), np.maximum(a, b)
+    edge_key = lo_f * count + hi_f
+    by_key = np.argsort(edge_key, kind="stable")
+    sorted_keys, sorted_flag = edge_key[by_key], disagree[by_key]
+    parent = np.arange(count)
+    step = np.zeros(count, dtype=bool)  # whether the edge to this face's parent disagrees
+    _, first_of, sizes = np.unique(labels, return_index=True, return_counts=True)
+    first_of = first_of[sizes > 1]  # a face alone has nothing to agree with
+    for root in first_of.tolist():
+        visited, pred = breadth_first_order(graph, root, directed=False, return_predecessors=True)
+        child = visited[1:]
+        par = pred[child]
+        parent[child] = par
+        k = np.minimum(par, child) * count + np.maximum(par, child)
+        step[child] = sorted_flag[np.searchsorted(sorted_keys, k)]
+    reach = parent.copy()
+    flip = step.copy()
+    while True:  # pointer doubling: fold each face's ancestors' steps in until every pointer reaches a root
+        nxt = reach[reach]
+        if np.array_equal(nxt, reach):
+            break
+        flip ^= flip[reach]
+        reach = nxt
+    return flip
 
 
 def load_mesh(path: Path) -> MeshModel:
@@ -147,7 +230,7 @@ class _Bvh:
         safe = np.where(valid, det, 1.0)
         self.inv_det = pad(1.0 / safe, 0.0)
         da, db, dc = depth[faces[:, 0]], depth[faces[:, 1]], depth[faces[:, 2]]
-        self.da, self.d1, self.d2 = pad(da, 0.0), pad(db - da, 0.0), pad(dc - da, 0.0)
+        self.da, self.d1, self.d2 = pad(da, -np.inf), pad(db - da, 0.0), pad(dc - da, 0.0)  # -inf: a padding triangle is never nearer than any ray
         tri_lo, tri_hi, tri_depth = pad(lo, np.inf), pad(hi, -np.inf), pad(np.maximum(np.maximum(da, db), dc), -np.inf)
         node_lo = tri_lo.reshape(leaves, MESH_LEAF, 2).min(axis=1)
         node_hi = tri_hi.reshape(leaves, MESH_LEAF, 2).max(axis=1)

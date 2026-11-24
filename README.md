@@ -19,7 +19,7 @@ Point it at a STEP file and it draws a third-angle drawing on an ANSI B sheet: h
 
 ## Use it in a repo
 
-1. **Export a STEP file** of the part you want drawn. In build123d that's `export_step(part, "build/part.step")`; in cadquery it's `cq.exporters.export(part, "build/part.step")`. An STL also works, but curves then draw as facets; a large one (over 100,000 triangles, up to 5 million) is drawn by a fast mesh path that cannot cut sections.
+1. **Export a STEP file** of the part you want drawn. In build123d that's `export_step(part, "build/part.step")`; in cadquery it's `cq.exporters.export(part, "build/part.step")`. An STL also works, but curves then draw as facets; a large one (over 100,000 triangles, up to 1,000,000; more is refused with a message) is drawn by a fast numpy mesh path that cannot cut sections. That path needs roughly 1 GB of memory at the 1,000,000-triangle limit (about 0.7 GB peak measured at 720,000) and tests each edge for visibility every diagonal/400 or so, so an occluder thinner than about that can be missed. Smaller STLs keep the exact sewn-shell path.
 2. **Add `blueprint.yml`** next to it:
 
    ```yaml
