@@ -118,6 +118,9 @@ jobs:
             echo "push rejected (attempt ${attempt}): re-rendering from the new tip of ${branch}"
             git fetch -q origin "${branch}"
             git reset -q --hard "origin/${branch}"
+            # reset keeps untracked and ignored files (a render-command's .venv, build output), which makes the retry differ from attempt 1:
+            # clean back to exactly what a fresh checkout gives.
+            git clean -q -ffdx
             render
           done
           echo "::error::could not push the re-rendered blueprints after 3 attempts"
