@@ -70,6 +70,7 @@ Sheet-millimetre distances used by the layout and the annotation helpers.
 | `extension_overrun` | `1.5` | extension line run past its dimension line |
 | `caption_drop` | `7.0` | caption distance below a view's lowest annotation |
 | `centre_overrun` | `2.5` | centre mark run past a circle |
+| `label_knockout` | `0.4` | paper-colour margin round a centre-line label; lines stop short of it, as at a dimension value (mm) |
 | `cut_leg` | `6.0` | cutting-plane line's bent end, from the line to the arrow tip |
 
 ## Toggles

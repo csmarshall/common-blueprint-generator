@@ -61,7 +61,7 @@ def render(cfg: DrawingConfig, dates: GitDates, rendered: date | None = None) ->
         if cfg.preview:
             require(cfg.readme, cfg.preview.output.name, PREVIEW)
     sheet = Sheet(cfg.sheet, replace(Style(), toggles=cfg.toggles))
-    layout = auto_sheet(sheet, load_shape(cfg.model), cfg.front, cfg.up, cfg.captions, cfg.views, cfg.isometric)
+    layout = auto_sheet(sheet, load_shape(cfg.model), cfg.front, cfg.up, cfg.captions, cfg.views, cfg.isometric, cfg.centre_lines)
     sheet.title_block(title_info(cfg, rendered, dates, licence), layout.scale)
     sheet.notes(cfg.notes)
     written = sheet.save(cfg.output, cfg.formats)

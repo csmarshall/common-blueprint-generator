@@ -8,11 +8,12 @@ from .geometry import Projection, beyond, load_shape, project, section_loops, se
 from .layout import auto_sheet, view_directions
 from .preview import PreviewLayout, as_shape, preview
 from .revisions import git_dates, revisions
-from .sheet import Canvas, Revision, Sheet, TitleInfo, View
+from .sheet import Canvas, CentreLine, Revision, Sheet, TitleInfo, View
 from .style import Style, Toggles, fmt, scale_label
 
 __all__ = [
     "Canvas",
+    "CentreLine",
     "PreviewLayout",
     "Projection",
     "Revision",

@@ -7,13 +7,14 @@ width and height, measured from its own projection; the isometric goes in the sp
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
 from OCP.TopoDS import TopoDS_Shape
 
 from .geometry import Projection, Vec, cross, project
-from .sheet import TEXT_HEIGHT_EM, Sheet, View
+from .sheet import TEXT_HEIGHT_EM, CentreLine, Sheet, View
 from .style import PT_PER_MM, STANDARD_SCALES
 
 log = logging.getLogger(__name__)
@@ -87,13 +88,16 @@ def auto_sheet(
     captions: dict[str, str] | None = None,
     views: tuple[str, ...] = DEFAULT_VIEWS,
     iso_size: float | None = DEFAULT_ISO_SIZE,
+    centre_lines: Sequence[CentreLine] = (),
 ) -> AutoLayout:
     """Project `shape`, choose the scale, place and draw the views with overall dimensions and captions.
 
     `views` picks which views appear, in any combination. Orthographic views keep their third-angle places on a grid (top above, bottom below,
     left and right beside the centre column, back at the far right) whether or not the front view is among them; one view on its own is centred and
     drawn as large as a standard scale allows (the isometric alone is scaled to fill the space). `iso_size` sets the isometric's scale as a multiple
-    of the main scale when it sits beside other views; None makes it fill the space to their right.
+    of the main scale when it sits beside other views; None makes it fill the space to their right. `centre_lines` are drawn on every orthographic
+    view where their axis projects to a line (the isometric is not to scale and carries no centre marks, so none there); one that draws in no
+    view is logged as a warning naming its label.
     """
     captions = {k.upper(): v for k, v in (captions or {}).items()}
     views = tuple(dict.fromkeys(v.upper() for v in views))  # drop repeats, keep order
@@ -110,8 +114,19 @@ def auto_sheet(
     area = (x0 + left, band_top + below, x1 - CLEARANCE, y1 - CLEARANCE)
     rev = sheet.rev_block_box(REV_ROWS_RESERVED)
     if len(views) == 1:
-        return _single(sheet, views[0], proj[views[0]], (area[0], area[1], area[2], rev[1] - CLEARANCE), captions)
-    return _grid(sheet, proj, area, rev, captions, iso_size)
+        layout = _single(sheet, views[0], proj[views[0]], (area[0], area[1], area[2], rev[1] - CLEARANCE), captions)
+    else:
+        layout = _grid(sheet, proj, area, rev, captions, iso_size)
+    _centre_lines(layout, centre_lines)
+    return layout
+
+
+def _centre_lines(layout: AutoLayout, centre_lines: Sequence[CentreLine]) -> None:
+    """Draw each centre line on every orthographic view it projects to a line in, warning about any that appear nowhere."""
+    for c in centre_lines:
+        drawn = [name for name, v in layout.views.items() if name != "ISOMETRIC" and v.centre_line(c.point, c.axis, c.label)]
+        if not drawn:
+            log.warning("centre line %r is drawn in no view: it points at every view chosen, or lies outside their outlines", c.label)
 
 
 def _single(sheet: Sheet, name: str, projection: Projection, area: tuple[float, float, float, float], captions: dict[str, str]) -> AutoLayout:

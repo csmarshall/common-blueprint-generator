@@ -32,7 +32,7 @@ from matplotlib.textpath import TextPath  # noqa: E402
 from matplotlib.transforms import Affine2D  # noqa: E402
 from scipy.ndimage import gaussian_filter  # noqa: E402
 
-from .geometry import Polyline, Projection  # noqa: E402
+from .geometry import Polyline, Projection, cross  # noqa: E402
 from .licences import NONCOMMERCIAL_NOTE, Licence, icon  # noqa: E402
 from .readme import PROJECT_NAME, PROJECT_URL  # noqa: E402
 from .style import PT_PER_MM, SHEET_SIZES, SheetSize, Style, fmt, scale_label  # noqa: E402
@@ -56,7 +56,25 @@ FIT_STEP = 0.97  # each step down when shrinking text to fit a cell; smaller ste
 MIN_CUT_LENGTH = 1e-6  # mm; a cutting-plane line shorter than this has no direction
 MIN_SIGHT = 1e-9  # a sight (or its unit component across the line) smaller than this says no side
 TEXT_HEIGHT_EM = 1.2  # a line of lettering is this many font sizes tall, ascender to descender
+MIN_AXIS_SHARE = 1e-6  # an axis whose share in the view plane is smaller than this (of its length) points at the viewer: it is a point, not a line
 PNG_DPI = 150  # 2550 px across an ANSI B sheet; the SVG is the scalable copy, so the PNG only needs to be a sharp preview
+
+
+@dataclass(frozen=True)
+class CentreLine:
+    """A named axis in model coordinates: `label`, a `point` on it and its `axis` direction. View.centre_line draws it."""
+
+    label: str
+    point: tuple[float, float, float]
+    axis: tuple[float, float, float]
+
+    def __post_init__(self) -> None:
+        """Refuse coordinates that are not three finite numbers, and an axis with no direction."""
+        for name, v in (("point", self.point), ("axis", self.axis)):
+            if len(v) != 3 or not all(isinstance(c, int | float) and not isinstance(c, bool) and math.isfinite(c) for c in v):
+                raise ValueError(f"centre line {self.label!r}: {name} must be three finite numbers, not {v!r}")
+        if not math.hypot(*self.axis) > 0:
+            raise ValueError(f"centre line {self.label!r}: axis {self.axis} has no direction")
 
 
 @dataclass
@@ -626,6 +644,74 @@ class View:
         self.sheet.ax.add_patch(Circle((float(c[0]), float(c[1])), rs, fc="none", ec=st.palette.ink, lw=st.lines.cutting, linestyle=(0, st.lines.cutting_dash)))
         at = c + (rs + st.type.caption / PT_PER_MM * TEXT_HEIGHT_EM) * np.array([math.cos(math.pi / 4), math.sin(math.pi / 4)])
         self.sheet.text(float(at[0]), float(at[1]), letter, st.type.caption, ha="center", va="center", weight="bold")
+
+    def centre_line(self, point: tuple[float, float, float], axis: tuple[float, float, float], label: str = "") -> bool:
+        """Draw the axis through model `point` along `axis` as a chain line across this view, labelled `CL label` inside the outline. True if drawn.
+
+        The point and direction go through the frame the view was projected with (x = up x toward_viewer, y = up), so the line lands where the
+        part's own edges do. The line runs the full width of the view's outline and a centre mark's overrun beyond it. An axis pointing at the
+        viewer projects to a single point, and nothing is drawn: a cross at an arbitrary size would be a new mark the style does not define, and
+        a circle seen face on already gets its own centre mark. A line that misses the outline entirely is not drawn either.
+        """
+        if self.proj.frame is None:
+            raise ValueError("this projection does not record its frame, so model axes cannot be placed on it (build it with project())")
+        toward, up = self.proj.frame
+        x_dir = np.asarray(cross(up, toward), float)
+        d = np.asarray(axis, float)
+        if not np.all(np.isfinite(d)) or not np.all(np.isfinite(point)) or not np.linalg.norm(d) > 0:
+            raise ValueError(f"centre line {label!r}: point {point} and axis {axis} must be finite, with a direction")
+        d = d / np.linalg.norm(d)
+        p2 = np.array([np.dot(point, x_dir), np.dot(point, up)]) * self.proj.unit
+        d2 = np.array([np.dot(d, x_dir), np.dot(d, up)])
+        if float(np.hypot(*d2)) < MIN_AXIS_SHARE:
+            log.debug("centre line %r points at the viewer: not drawn", label)
+            return False
+        x0, y0, x1, y1 = self.proj.bounds()
+        lo, hi = -math.inf, math.inf  # parameter range of the line inside the outline's box (Liang-Barsky)
+        for p, v, a, b in ((p2[0], d2[0], x0, x1), (p2[1], d2[1], y0, y1)):
+            if abs(v) < MIN_AXIS_SHARE:
+                if not a <= p <= b:
+                    return False
+                continue
+            t0, t1 = sorted(((a - p) / v, (b - p) / v))
+            lo, hi = max(lo, t0), min(hi, t1)
+        if not lo < hi:
+            return False
+        st = self.sheet.style
+        gap = st.spacing.centre_overrun
+        ends = self.to_sheet(p2 + lo * d2)[0], self.to_sheet(p2 + hi * d2)[0]  # where the line meets the outline's box
+        run = (ends[1] - ends[0]) / float(np.hypot(*(ends[1] - ends[0])))
+        a, b = ends[0] - run * gap, ends[1] + run * gap
+        first_line, first_text = len(self.sheet.ax.lines), len(self.sheet.ax.texts)
+        self.sheet.centre_line((float(a[0]), float(a[1])), (float(b[0]), float(b[1])))
+        if label:
+            # The label stays inside the outline's box, so it never reaches a neighbouring view's dimension or caption. A line that is nearer
+            # vertical gets it just under its top end, on the side of the line with more room; a nearer-horizontal one just inside its right end, above it.
+            x0s, _, x1s, _ = self.box()
+            if abs(run[1]) > abs(run[0]):
+                top = ends[1] if ends[1][1] >= ends[0][1] else ends[0]
+                right_half = top[0] > (x0s + x1s) / 2
+                at, ha, va = (top[0] + (-gap if right_half else gap), top[1] - gap), ("right" if right_half else "left"), "top"
+            else:
+                right = ends[1] if ends[1][0] >= ends[0][0] else ends[0]
+                at, ha, va = (right[0] - gap, right[1] + gap), "right", "bottom"
+            # A knockout in the paper colour behind the lettering, so the part's lines stop short of it (it is drawn with the text, above all lines).
+            pad = st.spacing.label_knockout / (st.type.dim / PT_PER_MM)  # boxstyle pad is in font sizes
+            self.sheet.text(
+                float(at[0]),
+                float(at[1]),
+                f"CL {label}",
+                st.type.dim,
+                st.palette.dim,
+                ha=ha,
+                va=va,
+                bbox={"boxstyle": f"square,pad={pad}", "fc": st.palette.paper, "ec": "none"},
+            )
+        texts = self.sheet.ax.texts[first_text:]
+        for t in texts:
+            t.set_clip_on(True)  # text is unclipped by default; a detail's crop circle has to cut the label as it cuts the line
+        self._clip(self.sheet.ax.lines[first_line:], texts)
+        return True
 
     def dim_h(self, x0: float, x1: float, y_ref: float, offset: float, text: str | None = None, ext: bool = True) -> None:
         """Horizontal dimension between model x0 and x1, drawn `offset` sheet mm above (positive) or below model y_ref."""

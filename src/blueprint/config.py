@@ -16,6 +16,7 @@ import yaml
 from .layout import ALL_VIEWS, DEFAULT_ISO_SIZE, DEFAULT_VIEWS
 from .licences import LICENCES, NONCOMMERCIAL_NOTE, Licence, lookup
 from .preview import PREVIEW_HEIGHT, PREVIEW_VIEW, PREVIEW_WIDTH
+from .sheet import CentreLine
 from .style import SHEET_SIZES, Toggles
 
 FORMATS = ("png", "svg", "pdf")
@@ -66,6 +67,16 @@ KEYS: tuple[Key, ...] = (
     ),
     Key("captions", "map", "{}", "Extra caption text per view, shown in brackets after the view name.", "{front: socket face, top: snap fingers up}"),
     Key("notes", "list", "[]", "General notes, numbered and wrapped in the lower-left corner.", "[Print flat edge down, no supports.]"),
+    Key(
+        "centre_lines",
+        "list",
+        "[]",
+        "Named axes to draw as chain lines, each `{label, point, axis}` in model coordinates (mm): `point` is any point on the axis, `axis` its "
+        "direction (any length, not zero). The line runs across every orthographic view where the axis projects to a line, labelled `CL` plus the "
+        "label. A view looking straight down the axis shows a point, and nothing is drawn there (circles seen face on already get their own centre "
+        "mark). The isometric carries none.",
+        "[{label: SOCKET AXIS, point: [12, 12, 0], axis: [0, 0, 1]}]",
+    ),
     Key(
         "licence",
         "SPDX id or map",
@@ -147,6 +158,7 @@ class DrawingConfig:
     readme: Path | None = None
     captions: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    centre_lines: tuple[CentreLine, ...] = ()
     toggles: Toggles = Toggles()
     preview: PreviewConfig | None = None
 
@@ -217,6 +229,7 @@ def load(path: Path) -> DrawingConfig:
         readme=(base / raw["readme"]).resolve() if raw.get("readme") else None,
         captions={str(k).upper(): str(v) for k, v in (raw.get("captions") or {}).items()},
         notes=[str(n) for n in raw.get("notes") or []],
+        centre_lines=_centre_lines(path, raw.get("centre_lines")),
         toggles=Toggles(**style),
         preview=_preview(path, raw.get("preview"), model, output),
     )
@@ -225,6 +238,31 @@ def load(path: Path) -> DrawingConfig:
 def _as_list(value: Any) -> list[Any]:
     """A YAML list as given, or a lone scalar (views: top) as a one-item list."""
     return list(value) if isinstance(value, list | tuple) else [value]
+
+
+def _centre_lines(path: Path, value: Any) -> tuple[CentreLine, ...]:
+    """`centre_lines: [{label, point: [x, y, z], axis: [x, y, z]}]` as CentreLines; every entry needs all three keys."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"{path}: centre_lines is a list of {{label, point, axis}} maps, not {value!r}")
+    out: list[CentreLine] = []
+    for entry in value:
+        if not isinstance(entry, dict) or set(entry) != {"label", "point", "axis"}:
+            raise ValueError(f"{path}: each centre line is a map of exactly label, point and axis, not {entry!r}")
+        if not isinstance(entry["label"], str):
+            raise ValueError(f"{path}: a centre line's label is text, not {entry['label']!r}")
+        triples = []
+        for name in ("point", "axis"):
+            v = entry[name]
+            if not isinstance(v, list) or len(v) != 3:
+                raise ValueError(f"{path}: centre line {entry['label']!r}: {name} is a list of three numbers [x, y, z], not {v!r}")
+            triples.append(v)
+        try:
+            out.append(CentreLine(entry["label"], tuple(triples[0]), tuple(triples[1])))
+        except ValueError as e:
+            raise ValueError(f"{path}: {e}") from None
+    return tuple(out)
 
 
 def _licence(path: Path, value: Any) -> tuple[Licence | None, str | None]:

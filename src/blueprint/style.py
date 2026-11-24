@@ -101,6 +101,7 @@ class Spacing:
     extension_overrun: float = 1.5  # extension line run past its dimension line
     caption_drop: float = 7.0  # caption distance below a view's lowest annotation
     centre_overrun: float = 2.5  # centre mark run past a circle
+    label_knockout: float = 0.4  # paper-colour margin round a centre-line label; lines stop short of it, as at a dimension value (mm)
     cut_leg: float = 6.0  # cutting-plane line's bent end, from the line to the arrow tip
 
 
