@@ -16,7 +16,7 @@ from blueprint.config import load
 from blueprint.geometry import project, section_loops
 from blueprint.layout import ALL_VIEWS, auto_sheet
 from blueprint.licences import LICENCES, icon, lookup
-from blueprint.readme import SUPPORT_URL, embed
+from blueprint.readme import embed
 from blueprint.sheet import Sheet, TitleInfo
 from blueprint.style import SHEET_SIZES
 
@@ -181,6 +181,7 @@ def test_two_drawings_cannot_share_a_readme_marker(tmp_path: Path, block_step: P
     assert not (tmp_path / "one").exists(), "nothing is rendered when two drawings would fight over one marker"
 
 
-def test_embed_credits_and_links_support(tmp_path: Path) -> None:
+def test_embed_credits_without_a_coffee_link(tmp_path: Path) -> None:
+    """#26: the coffee link lives once per repo (README badge, FUNDING.yml), not under every drawing."""
     text = embed(tmp_path / "README.md", tmp_path / "docs" / "part.svg", "PART", "u1/u1_parts.py")
-    assert "[![PART](docs/part.svg)](docs/part.svg)" in text and "`u1/u1_parts.py`" in text and f"]({SUPPORT_URL})" in text
+    assert "[![PART](docs/part.svg)](docs/part.svg)" in text and "`u1/u1_parts.py`" in text and "coffee" not in text.lower()

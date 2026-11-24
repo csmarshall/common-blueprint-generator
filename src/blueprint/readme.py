@@ -21,7 +21,6 @@ from pathlib import Path
 
 PROJECT_NAME = "common-blueprint-generator"
 PROJECT_URL = "https://github.com/csmarshall/common-blueprint-generator"
-SUPPORT_URL = "https://buymeacoffee.com/cs_marshall"
 # A `uses:` line calling this project's reusable render workflow: from a caller repo by URL, or from this repo itself (publish.yml dogfoods it).
 # Matches any trigger (push, dispatch, schedule): the claim is about who renders, and every caller so far renders on push.
 RENDER_WORKFLOW = re.compile(
@@ -70,7 +69,7 @@ def embed(readme: Path, image: Path, title: str, source: str | Path, what: str =
     rel = Path(os.path.relpath(image, readme.parent)).as_posix()
     source = Path(os.path.relpath(source, readme.parent)).as_posix() if isinstance(source, Path) else source
     claim = " on every change to the model" if ci else ""
-    credit = f"{what} generated from `{source}` by [{PROJECT_NAME}]({PROJECT_URL}){claim} · [Buy me a coffee]({SUPPORT_URL})"
+    credit = f"{what} generated from `{source}` by [{PROJECT_NAME}]({PROJECT_URL}){claim}"
     return f"[![{title}]({rel})]({rel})\n\n<sub>{credit}</sub>"
 
 
