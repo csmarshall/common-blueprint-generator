@@ -22,6 +22,11 @@ from pathlib import Path
 PROJECT_NAME = "common-blueprint-generator"
 PROJECT_URL = "https://github.com/csmarshall/common-blueprint-generator"
 SUPPORT_URL = "https://buymeacoffee.com/cs_marshall"
+# A `uses:` line calling this project's reusable render workflow: from a caller repo by URL, or from this repo itself (publish.yml dogfoods it).
+# Matches any trigger (push, dispatch, schedule): the claim is about who renders, and every caller so far renders on push.
+RENDER_WORKFLOW = re.compile(
+    r"^\s*(?:-\s*)?uses:\s*['\"]?(?:csmarshall/common-blueprint-generator/|\./)\.github/workflows/render\.yml(?=[@'\"\s]|$)", re.MULTILINE | re.IGNORECASE
+)
 SHEET = "blueprint"  # marker kind for a drawing sheet
 PREVIEW = "blueprint-preview"  # marker kind for a preview
 
@@ -33,15 +38,39 @@ def markers(name: str, kind: str = SHEET) -> tuple[str, str]:
     return f"<!-- {kind}:{name} -->", f"<!-- /{kind} -->"
 
 
-def embed(readme: Path, image: Path, title: str, source: str | Path, what: str = "Drawing") -> str:
+def renders_in_ci(readme: Path) -> bool:
+    """True if the repo holding `readme` re-renders its drawings in CI: one of its workflows calls this project's reusable render workflow.
+
+    Read from the repo rather than the environment (GITHUB_ACTIONS), so a local render of a CI repo writes the same credit line as CI does and the
+    README does not flip between two wordings. The repo root is the nearest directory upward holding `.git` (a directory, or a file in a worktree).
+    """
+    for root in [readme.resolve().parent, *readme.resolve().parent.parents]:
+        if (root / ".git").exists():
+            workflows = root / ".github" / "workflows"
+            files = sorted(f for f in [*workflows.glob("*.yml"), *workflows.glob("*.yaml")] if f.is_file()) if workflows.is_dir() else []
+            for f in files:
+                if RENDER_WORKFLOW.search(f.read_text(encoding="utf-8", errors="replace")):
+                    log.debug("%s calls the render workflow: the credit claims a re-render on every change", f)
+                    return True
+            log.debug("no workflow under %s calls the render workflow: the credit makes no re-render claim", workflows)
+            return False
+    log.debug("%s is not inside a git repo: the credit makes no re-render claim", readme)
+    return False
+
+
+def embed(readme: Path, image: Path, title: str, source: str | Path, what: str = "Drawing", ci: bool | None = None) -> str:
     """The Markdown that goes between the markers: the image linked to itself at full size, then the credit line.
 
     `source` names what the drawing is generated from: a path (shown relative to the README) or text such as "u1/u1_parts.py". `what` opens the
-    credit line ("Drawing", or "Preview" for a preview).
+    credit line ("Drawing", or "Preview" for a preview). The line claims a re-render "on every change to the model" only when `ci` is true, which
+    by default is read from the repo (renders_in_ci); a repo that renders locally (make blueprint) gets the line without the claim.
     """
+    if ci is None:
+        ci = renders_in_ci(readme)
     rel = Path(os.path.relpath(image, readme.parent)).as_posix()
     source = Path(os.path.relpath(source, readme.parent)).as_posix() if isinstance(source, Path) else source
-    credit = f"{what} generated from `{source}` by [{PROJECT_NAME}]({PROJECT_URL}) on every change to the model · [Buy me a coffee]({SUPPORT_URL})"
+    claim = " on every change to the model" if ci else ""
+    credit = f"{what} generated from `{source}` by [{PROJECT_NAME}]({PROJECT_URL}){claim} · [Buy me a coffee]({SUPPORT_URL})"
     return f"[![{title}]({rel})]({rel})\n\n<sub>{credit}</sub>"
 
 
