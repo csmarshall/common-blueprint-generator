@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from matplotlib import colors as mcolors
 from matplotlib.lines import Line2D
 
 from blueprint import Sheet, View, project, section_view
 from blueprint.config import load
 from blueprint.layout import auto_sheet, view_directions
 from blueprint.sheet import CentreLine
+from blueprint.style import PT_PER_MM
 
 ORIGIN = (60.0, 100.0)
 SCALE = 2.0
@@ -314,3 +316,22 @@ def test_config_reads_centre_lines(tmp_path: object) -> None:
 def test_config_refuses_bad_centre_lines(tmp_path: object, extra: str, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         load(_cfg(tmp_path, extra))  # type: ignore[arg-type]
+
+
+def test_label_has_a_paper_knockout_above_the_lines_and_clipped_on_a_detail(block: object) -> None:
+    sheet = Sheet("B")
+    view = View(sheet, project(block, (0, 0, 1), (0, 1, 0)), ORIGIN, SCALE)
+    view.draw()
+    view.centre_line((30, 0, 5), (0, 1, 0), "AX")
+    text = _label(sheet, "CL AX")
+    patch = text.get_bbox_patch()  # type: ignore[attr-defined]
+    assert patch is not None and patch.get_edgecolor()[3] == 0
+    assert patch.get_facecolor() == pytest.approx(mcolors.to_rgba(sheet.style.palette.paper))
+    assert text.get_zorder() > max(ln.get_zorder() for ln in sheet.ax.lines), "drawn after every line, with the text on top of its own patch"
+    pad_pt = sheet.style.spacing.label_knockout * PT_PER_MM
+    assert text.get_bbox_patch().get_boxstyle().pad * sheet.style.type.dim == pytest.approx(pad_pt)  # type: ignore[attr-defined]
+    crop = Sheet("B")
+    View(crop, project(block, (0, 0, 1), (0, 1, 0)).cropped((30, 15), 8.0), ORIGIN, SCALE).centre_line((30, 0, 5), (0, 1, 0), "AX")
+    cropped = _label(crop, "CL AX")
+    cropped.draw(crop.fig.canvas.get_renderer())  # type: ignore[attr-defined]  # the patch takes the text's clip when it is laid out
+    assert cropped.get_bbox_patch().get_clip_path() is not None  # type: ignore[attr-defined]

@@ -695,7 +695,18 @@ class View:
             else:
                 right = ends[1] if ends[1][0] >= ends[0][0] else ends[0]
                 at, ha, va = (right[0] - gap, right[1] + gap), "right", "bottom"
-            self.sheet.text(float(at[0]), float(at[1]), f"CL {label}", st.type.dim, st.palette.dim, ha=ha, va=va)
+            # A knockout in the paper colour behind the lettering, so the part's lines stop short of it (it is drawn with the text, above all lines).
+            pad = st.spacing.label_knockout / (st.type.dim / PT_PER_MM)  # boxstyle pad is in font sizes
+            self.sheet.text(
+                float(at[0]),
+                float(at[1]),
+                f"CL {label}",
+                st.type.dim,
+                st.palette.dim,
+                ha=ha,
+                va=va,
+                bbox={"boxstyle": f"square,pad={pad}", "fc": st.palette.paper, "ec": "none"},
+            )
         texts = self.sheet.ax.texts[first_text:]
         for t in texts:
             t.set_clip_on(True)  # text is unclipped by default; a detail's crop circle has to cut the label as it cuts the line
